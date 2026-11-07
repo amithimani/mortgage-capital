@@ -299,6 +299,10 @@ slip in behind the ingest interface.
   pinned at `0.11.2`. Re-verify signatures against the wheel on every upgrade.
 - **Double evaluation** (C3): if the same policy is bound to both the tracer and `PolicyGate`,
   expect duplicate ledger entries. Keep them separate.
+- **Deployment state (new):** the agent ships as a cloud-agnostic container image
+  (docs/DEPLOYMENT.md). With SQLite, durable state needs a block volume and one replica, which
+  works on Kubernetes and on VMs. Serverless container platforms (Cloud Run, Fargate, Container
+  Apps, App Runner) and multiple replicas need the Postgres checkpointer and run store first.
 - **Sample data access:** the design starts with mock data, so real data changes fixtures, not
   architecture.
 - **Validator threshold calibration:** done in Week 3 against seeded ground truth. Each published

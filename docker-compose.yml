@@ -1,0 +1,27 @@
+# Local run of the container exactly as it ships:  docker compose up --build
+# Hardened like production: read-only root filesystem, no capabilities, non-root user.
+services:
+  mc-recon:
+    build:
+      context: .
+      args:
+        REVISION: ${GIT_SHA:-dev}
+    image: mc-recon:local
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      MC_LOG_LEVEL: info
+      # MC_DATA_ROOT: /data            # mount real datasets and point here
+    volumes:
+      - mc-recon-data:/app/var
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  mc-recon-data:

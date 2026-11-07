@@ -1,0 +1,11 @@
+# Only what the image needs: pyproject, README, src/, requirements/, data/synthetic/
+*
+!pyproject.toml
+!README.md
+!src/
+!requirements/
+!data/synthetic/
+**/__pycache__
+**/*.py[cod]
+**/*.sqlite
+**/*.db

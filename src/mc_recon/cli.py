@@ -66,7 +66,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--mapping", type=Path, help="ColumnMapping JSON (default: expected_mapping)")
     r.add_argument("--check", action="store_true", help="compare against seeded_errors.json")
 
+    sub.add_parser("serve", help="run the agent HTTP API (configured by environment variables)")
+
     args = parser.parse_args(argv)
+    if args.cmd == "serve":
+        from .server import serve
+
+        return serve()
     if args.cmd == "generate":
         return synthetic.main(args.rest)
     if args.cmd == "profile":

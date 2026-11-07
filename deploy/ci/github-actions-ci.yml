@@ -1,0 +1,40 @@
+# To activate: move this file to .github/workflows/ci.yml (needs a GitHub token with the
+# `workflow` scope, or add it through the GitHub web UI).
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests scripts && ruff format --check src tests scripts
+      - run: pytest
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --build-arg REVISION=${{ github.sha }} -t mc-recon:ci .
+      - name: Run hardened container
+        run: |
+          docker run -d --name mc-recon -p 8000:8000 -v mc-recon-data:/app/var \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges mc-recon:ci
+      - name: Smoke test
+        run: python3 scripts/smoke_test.py http://127.0.0.1:8000 --wait 60
+      - name: Container logs
+        if: always()
+        run: docker logs mc-recon || true

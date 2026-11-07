@@ -101,6 +101,14 @@ class RunStore:
     def close(self) -> None:
         self._conn.close()
 
+    def ping(self) -> bool:
+        try:
+            with self._lock:
+                self._conn.execute("SELECT 1 FROM runs LIMIT 1").fetchall()
+            return True
+        except sqlite3.Error:
+            return False
+
     # --- runs ------------------------------------------------------------------------------
 
     def create_run(self, run_id: str, dataset: str, created_by: str, manifest: dict) -> None:

@@ -7,21 +7,21 @@ different body is ``409``.
 
 Run with the fakes::
 
-    uvicorn mc_recon.api:app --reload
+    mc-recon serve                    # reads PORT / MC_* env vars, see mc_recon.config
+    uvicorn mc_recon.api:app --reload # dev
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 from collections.abc import Callable
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from .config import ConfigError, Settings
 from .llm.provider import canonical_json
 from .service import Conflict, ReviewDecision, RunService, ServiceError, Unauthorized
 from .store import RunStore
@@ -80,6 +80,13 @@ def create_app(service: RunService) -> FastAPI:
             "model_id": service.deps.llm.model_id,
             "policy_id": service.deps.gate.policy_id,
         }
+
+    @app.get("/readyz")
+    def readyz() -> JSONResponse:
+        """Readiness: the run store answers and the LLM provider is usable."""
+        checks = {"store": store.ping(), "llm": service.deps.llm is not None}
+        ok = all(checks.values())
+        return JSONResponse(status_code=200 if ok else 503, content={"ready": ok, **checks})
 
     @app.post("/runs", status_code=201)
     def start_run(body: StartRun, analyst: Analyst, idem: IdemKey = None) -> JSONResponse:
@@ -145,24 +152,27 @@ def create_app(service: RunService) -> FastAPI:
     return app
 
 
-def build_default_service() -> RunService:
-    """Fakes end to end: recorded LLM over every pair's oracle recordings + FakePolicyGate."""
+def build_service(settings: Settings) -> RunService:
+    """Wire the agent from settings. Today: recorded fake LLM + FakePolicyGate."""
     from .data.oracle import RECORDINGS_FILE
     from .graph import AgentDeps
     from .llm import RecordedFakeProvider
     from .policy import FakePolicyGate
     from .service import sqlite_checkpointer
 
-    data_root = Path(os.environ.get("MC_DATA_ROOT", "data/synthetic"))
-    db_path = os.environ.get("MC_DB_PATH", "var/mc_recon.sqlite")
-    llm = RecordedFakeProvider.from_files(*sorted(data_root.glob(f"*/{RECORDINGS_FILE}")))
-    deps = AgentDeps(llm=llm, gate=FakePolicyGate(), store=RunStore(db_path))
-    return RunService(deps, data_root, checkpointer=sqlite_checkpointer(db_path))
+    recordings = sorted(settings.data_root.glob(f"*/{RECORDINGS_FILE}"))
+    if settings.llm_provider == "fake" and not recordings:
+        raise ConfigError(
+            f"MC_LLM_PROVIDER=fake needs */{RECORDINGS_FILE} under {settings.data_root}"
+        )
+    llm = RecordedFakeProvider.from_files(*recordings)
+    deps = AgentDeps(llm=llm, gate=FakePolicyGate(), store=RunStore(settings.db_path))
+    return RunService(deps, settings.data_root, checkpointer=sqlite_checkpointer(settings.db_path))
 
 
-def __getattr__(name: str) -> Any:  # lazy module-level `app` for uvicorn
+def __getattr__(name: str) -> Any:  # lazy module-level `app` for `uvicorn mc_recon.api:app`
     if name == "app":
         global app
-        app = create_app(build_default_service())
+        app = create_app(build_service(Settings.from_env()))
         return app
     raise AttributeError(name)
