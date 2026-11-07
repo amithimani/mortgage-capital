@@ -1,0 +1,208 @@
+{
+  "version": 1,
+  "recordings": [
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "884a006dd47d8ebc2ed3819925653213e8f42acff6b9002a80eca1ac1202311d",
+      "output": {
+        "category": "UNIDENTIFIED_PAYMENT",
+        "reason": "Engine finding UNMATCHED_PAYMENT: Payment TX303000034 of 875.40 references loan MC-3039999, which is not in the servicing extract."
+      },
+      "label": "pair_03:D-044c78d4facf:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "93733c39e23e166a6f248812a0b7a48449be2e10e569c884a8f3426aa92d3d3b",
+      "output": {
+        "category": "RATE_MARGIN_BREACH",
+        "reason": "Engine finding RATE_COMPONENT_MISMATCH: Applied rate 6.25% for MC-3030059 does not equal base 4.00% + margin 1.75% = 5.75%."
+      },
+      "label": "pair_03:D-0a37c0360c6c:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "bfa76ebfd1eadc61daf6db254e2aeed7c6de0fbad857fff0ba1ad3e646106989",
+      "output": {
+        "category": "INVESTOR_BALANCE_BREAK",
+        "reason": "Engine finding BALANCE_MISMATCH: Investor closing balance 101,225.78 for MC-3030037 differs from servicing 99,975.78 by 1,250.00."
+      },
+      "label": "pair_03:D-10b61049f637:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "6d8c81d0e36a4af3ace24c7d3155de196fbd3ab3fb08cf9bd070d9ab59f05915",
+      "output": {
+        "category": "PARTIAL_OR_OVERPAYMENT",
+        "reason": "Engine finding AMOUNT_MISMATCH: Net received 610.57 for MC-3030009 differs from scheduled 1,017.61 by -407.04."
+      },
+      "label": "pair_03:D-59dd08a490ed:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "c1f38c8f03028676b463939bedc300b7d7f62dec73577f91368d82ec4050f251",
+      "output": {
+        "category": "MISSING_PAYMENT",
+        "reason": "Engine finding UNMATCHED_EXPECTED_PAYMENT: No payment found for MC-3030073 within ±3 days of due date 2026-09-20 (scheduled 1,167.13)."
+      },
+      "label": "pair_03:D-a52ee2d94bba:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "a3c28c195572863df9c6cb01ace69d31409e003b5552f2471389388bf77836a5",
+      "output": {
+        "category": "DUPLICATE_DIRECT_DEBIT",
+        "reason": "Engine finding DUPLICATE_PAYMENT: 1 duplicate direct debit(s) totalling 1,977.35 for MC-3030045 on mandate DDM30300045: original TX303000053, duplicate(s) TX303000062."
+      },
+      "label": "pair_03:D-c2e9e554ce13:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "7ea67336a4f684abe97da56f9b1be3750f360814067c4b2fe12ba417084c44cc",
+      "output": {
+        "rationale": "Payment TX303000034 of 875.40 references loan MC-3039999, which is not in the servicing extract.",
+        "remediation_note": "Move the funds to suspense and trace the payer via the bank reference.",
+        "cited_evidence": [
+          "payments:34"
+        ]
+      },
+      "label": "pair_03:D-044c78d4facf:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "5b3b0d2ab196696e54a3e8c42ee8a3538b1e4c4c4afaddd5731ec2a1a852072f",
+      "output": {
+        "rationale": "Applied rate 6.25% for MC-3030059 does not equal base 4.00% + margin 1.75% = 5.75%.",
+        "remediation_note": "Correct the applied rate to base + contractual margin, recalculate interest and refund any overcharge; notify the investor of the restated rate.",
+        "cited_evidence": [
+          "servicing:60"
+        ]
+      },
+      "label": "pair_03:D-0a37c0360c6c:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "594aff438a56ec22a83514b42fa12a0d16d7fc9f46bc7b8431199cbdf3aeb5fc",
+      "output": {
+        "rationale": "Investor closing balance 101,225.78 for MC-3030037 differs from servicing 99,975.78 by 1,250.00.",
+        "remediation_note": "Reissue the investor report line with the servicing closing balance after review.",
+        "cited_evidence": [
+          "servicing:38",
+          "investor:38"
+        ]
+      },
+      "label": "pair_03:D-10b61049f637:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "a874a1c2124d9410dcc77e47fbc8cef778e0c4fbc76684b7e3a9e31f88a96387",
+      "output": {
+        "rationale": "Net received 610.57 for MC-3030009 differs from scheduled 1,017.61 by -407.04.",
+        "remediation_note": "Confirm the shortfall or excess with the borrower and allocate per the payment allocation policy.",
+        "cited_evidence": [
+          "servicing:10",
+          "payments:35"
+        ]
+      },
+      "label": "pair_03:D-59dd08a490ed:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "8c485fd6a8ee5371594522a3cba575d7846d17aa8f02e40f970fd55ddbfddbac",
+      "output": {
+        "rationale": "No payment found for MC-3030073 within ±3 days of due date 2026-09-20 (scheduled 1,167.13).",
+        "remediation_note": "Contact the borrower and check the direct debit / standing order status; raise an arrears case if unpaid after the grace period.",
+        "cited_evidence": [
+          "servicing:74"
+        ]
+      },
+      "label": "pair_03:D-a52ee2d94bba:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "2cd2715c8131c04038f39c9128904dc6bd37c2cdfee62d182b783caafb5abd7d",
+      "output": {
+        "rationale": "1 duplicate direct debit(s) totalling 1,977.35 for MC-3030045 on mandate DDM30300045: original TX303000053, duplicate(s) TX303000062.",
+        "remediation_note": "Refund the duplicate collection to the borrower and raise a ticket with the DD bureau.",
+        "cited_evidence": [
+          "servicing:46",
+          "payments:53",
+          "payments:62"
+        ]
+      },
+      "label": "pair_03:D-c2e9e554ce13:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "propose_mapping",
+      "prompt_version": "mapping.v1",
+      "cache_key": "547c0f592a4dc6b463fec8713828693a919d3374b6fb8d41c7e966851b3e686f",
+      "output": {
+        "mapping": {
+          "servicing": {
+            "columns": {
+              "loan_id": "Acct No",
+              "pool_id": "Pool",
+              "due_date": "Pmt Due Dt",
+              "scheduled_amount": "Sched Pmt Amt",
+              "closing_balance": "Cur Bal",
+              "base_rate": "Base Rt %",
+              "margin": "Margin %",
+              "applied_rate": "Applied Rt %",
+              "mandate_ref": "DD Mandate"
+            },
+            "date_format": null
+          },
+          "payments": {
+            "columns": {
+              "txn_id": "TXN_ID",
+              "loan_id": "LOAN_REF",
+              "value_date": "VALUE_DATE",
+              "amount": "AMOUNT_GBP",
+              "channel": "CHANNEL",
+              "mandate_ref": "MANDATE_REF"
+            },
+            "date_format": "%d/%m/%Y"
+          },
+          "investor": {
+            "columns": {
+              "loan_id": "Loan Identifier",
+              "pool_id": "Pool",
+              "period_end": "Period End",
+              "reported_rate": "Reported Rate",
+              "reported_margin": "Reported Margin",
+              "scheduled_amount": "Scheduled P&I",
+              "closing_balance": "Closing Principal Balance"
+            },
+            "date_format": null
+          }
+        },
+        "notes": ""
+      },
+      "label": "pair_03:mapping",
+      "source_model": "oracle"
+    }
+  ]
+}

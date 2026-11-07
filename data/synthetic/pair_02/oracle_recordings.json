@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "recordings": [
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "d8366c234053d9d93a8a424fea286be31380bf9738ac01a5d16cbb744de8911b",
+      "output": {
+        "category": "RATE_MARGIN_BREACH",
+        "reason": "Engine finding RATE_COMPONENT_MISMATCH: Applied rate 5.99% for MC-2020033 does not equal base 4.00% + margin 1.49% = 5.49%."
+      },
+      "label": "pair_02:D-00faca48642d:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "e3a5c95b048bf4424dcb07057e514a35709a0f82cb68ffdc4bff749bf85d28bc",
+      "output": {
+        "category": "DUPLICATE_DIRECT_DEBIT",
+        "reason": "Engine finding DUPLICATE_PAYMENT: 1 duplicate direct debit(s) totalling 1,186.03 for MC-2020014 on mandate DDM20200014: original TX202000045, duplicate(s) TX202000050."
+      },
+      "label": "pair_02:D-0af9c0b50d8b:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "81839058f42c2a0ebca4c943f3ad7ee3136f0352d80a27f2f883f2cb153464f7",
+      "output": {
+        "category": "MISSING_PAYMENT",
+        "reason": "Engine finding UNMATCHED_EXPECTED_PAYMENT: No payment found for MC-2020010 within ±3 days of due date 2026-09-15 (scheduled 1,836.95)."
+      },
+      "label": "pair_02:D-26e34ae5e2f7:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "13da508b7282cc51721ce9514663f33a622eafee5f16e79e337ef22e8deacab8",
+      "output": {
+        "category": "INVESTOR_BALANCE_BREAK",
+        "reason": "Engine finding BALANCE_MISMATCH: Investor closing balance 327,923.31 for MC-2020045 differs from servicing 326,673.31 by 1,250.00."
+      },
+      "label": "pair_02:D-93d248088d6c:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "2f04707b7733bd282a22d56726e3b9f19ad0ba1b66def83445472f5ee64ebf25",
+      "output": {
+        "category": "PARTIAL_OR_OVERPAYMENT",
+        "reason": "Engine finding AMOUNT_MISMATCH: Net received 692.47 for MC-2020046 differs from scheduled 1,154.12 by -461.65."
+      },
+      "label": "pair_02:D-f547796c70a4:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "6a82dcb779ab00b81ad1c6e10fa88c41f20934eb425565e52d60abb57959ba55",
+      "output": {
+        "rationale": "Applied rate 5.99% for MC-2020033 does not equal base 4.00% + margin 1.49% = 5.49%.",
+        "remediation_note": "Correct the applied rate to base + contractual margin, recalculate interest and refund any overcharge; notify the investor of the restated rate.",
+        "cited_evidence": [
+          "servicing:34"
+        ]
+      },
+      "label": "pair_02:D-00faca48642d:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "5cc252be7e29c5c5d3801123f0c47c7234877425c52f5e77b1b539d1ac57ca24",
+      "output": {
+        "rationale": "1 duplicate direct debit(s) totalling 1,186.03 for MC-2020014 on mandate DDM20200014: original TX202000045, duplicate(s) TX202000050.",
+        "remediation_note": "Refund the duplicate collection to the borrower and raise a ticket with the DD bureau.",
+        "cited_evidence": [
+          "servicing:15",
+          "payments:45",
+          "payments:50"
+        ]
+      },
+      "label": "pair_02:D-0af9c0b50d8b:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "1fbacc34a7ef430f7db81f754ff081bb382df03e10e76c12816a9f2b57eb5621",
+      "output": {
+        "rationale": "No payment found for MC-2020010 within ±3 days of due date 2026-09-15 (scheduled 1,836.95).",
+        "remediation_note": "Contact the borrower and check the direct debit / standing order status; raise an arrears case if unpaid after the grace period.",
+        "cited_evidence": [
+          "servicing:11"
+        ]
+      },
+      "label": "pair_02:D-26e34ae5e2f7:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "7dec1f4a143bf293277229294f161bbfc2ad851760cd795e5f8d1ae9630bf894",
+      "output": {
+        "rationale": "Investor closing balance 327,923.31 for MC-2020045 differs from servicing 326,673.31 by 1,250.00.",
+        "remediation_note": "Reissue the investor report line with the servicing closing balance after review.",
+        "cited_evidence": [
+          "servicing:46",
+          "investor:46"
+        ]
+      },
+      "label": "pair_02:D-93d248088d6c:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "6a68c6f39c8ef628f699fa95849fb03dac5592460b947bfd71525f86d09bf4f4",
+      "output": {
+        "rationale": "Net received 692.47 for MC-2020046 differs from scheduled 1,154.12 by -461.65.",
+        "remediation_note": "Confirm the shortfall or excess with the borrower and allocate per the payment allocation policy.",
+        "cited_evidence": [
+          "servicing:47",
+          "payments:40"
+        ]
+      },
+      "label": "pair_02:D-f547796c70a4:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "propose_mapping",
+      "prompt_version": "mapping.v1",
+      "cache_key": "f4c7a35f36a5289f23691e38445b2eb4ea1d2599f41a6eb80aa5042ee67d6714",
+      "output": {
+        "mapping": {
+          "servicing": {
+            "columns": {
+              "loan_id": "account_number",
+              "pool_id": "funding_pool",
+              "due_date": "next_due_date",
+              "scheduled_amount": "contractual_payment",
+              "closing_balance": "principal_outstanding",
+              "base_rate": "reference_rate",
+              "margin": "loan_margin",
+              "applied_rate": "charged_rate",
+              "mandate_ref": "mandate_id"
+            },
+            "date_format": null
+          },
+          "payments": {
+            "columns": {
+              "txn_id": "Reference",
+              "loan_id": "Account",
+              "value_date": "Received On",
+              "amount": "Amount",
+              "channel": "Method",
+              "mandate_ref": "DDI Ref"
+            },
+            "date_format": "%d-%m-%Y"
+          },
+          "investor": {
+            "columns": {
+              "loan_id": "LoanID",
+              "pool_id": "PoolCode",
+              "period_end": "ReportingDate",
+              "reported_rate": "InterestRate",
+              "reported_margin": "Margin",
+              "scheduled_amount": "ScheduledPayment",
+              "closing_balance": "EndingBalance"
+            },
+            "date_format": null
+          }
+        },
+        "notes": ""
+      },
+      "label": "pair_02:mapping",
+      "source_model": "oracle"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "servicing": {
+    "columns": {
+      "loan_id": "Acct No",
+      "pool_id": "Pool",
+      "due_date": "Pmt Due Dt",
+      "scheduled_amount": "Sched Pmt Amt",
+      "closing_balance": "Cur Bal",
+      "base_rate": "Base Rt %",
+      "margin": "Margin %",
+      "applied_rate": "Applied Rt %",
+      "mandate_ref": "DD Mandate"
+    },
+    "date_format": null
+  },
+  "payments": {
+    "columns": {
+      "txn_id": "TXN_ID",
+      "loan_id": "LOAN_REF",
+      "value_date": "VALUE_DATE",
+      "amount": "AMOUNT_GBP",
+      "channel": "CHANNEL",
+      "mandate_ref": "MANDATE_REF"
+    },
+    "date_format": "%d/%m/%Y"
+  },
+  "investor": {
+    "columns": {
+      "loan_id": "Loan Identifier",
+      "pool_id": "Pool",
+      "period_end": "Period End",
+      "reported_rate": "Reported Rate",
+      "reported_margin": "Reported Margin",
+      "scheduled_amount": "Scheduled P&I",
+      "closing_balance": "Closing Principal Balance"
+    },
+    "date_format": null
+  }
+}

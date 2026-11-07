@@ -1,0 +1,39 @@
+{
+  "servicing": {
+    "columns": {
+      "loan_id": "account_number",
+      "pool_id": "funding_pool",
+      "due_date": "next_due_date",
+      "scheduled_amount": "contractual_payment",
+      "closing_balance": "principal_outstanding",
+      "base_rate": "reference_rate",
+      "margin": "loan_margin",
+      "applied_rate": "charged_rate",
+      "mandate_ref": "mandate_id"
+    },
+    "date_format": null
+  },
+  "payments": {
+    "columns": {
+      "txn_id": "Reference",
+      "loan_id": "Account",
+      "value_date": "Received On",
+      "amount": "Amount",
+      "channel": "Method",
+      "mandate_ref": "DDI Ref"
+    },
+    "date_format": "%d-%m-%Y"
+  },
+  "investor": {
+    "columns": {
+      "loan_id": "LoanID",
+      "pool_id": "PoolCode",
+      "period_end": "ReportingDate",
+      "reported_rate": "InterestRate",
+      "reported_margin": "Margin",
+      "scheduled_amount": "ScheduledPayment",
+      "closing_balance": "EndingBalance"
+    },
+    "date_format": null
+  }
+}

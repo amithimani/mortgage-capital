@@ -1,0 +1,104 @@
+{
+  "generator_version": "1",
+  "pair": "pair_01",
+  "seed": 101,
+  "period": "2026-09",
+  "header_variant": "A",
+  "loans": 40,
+  "payments": 41,
+  "errors": [
+    {
+      "type": "rate_margin_breach",
+      "loan_id": "MC-1010007",
+      "txn_ids": [],
+      "expected_kind": "RATE_COMPONENT_MISMATCH",
+      "expected_category": "RATE_MARGIN_BREACH",
+      "description": "Applied rate charged at margin + 0.50pp above contractual base + margin."
+    },
+    {
+      "type": "duplicate_direct_debit",
+      "loan_id": "MC-1010008",
+      "txn_ids": [
+        "TX101000021"
+      ],
+      "expected_kind": "DUPLICATE_PAYMENT",
+      "expected_category": "DUPLICATE_DIRECT_DEBIT",
+      "description": "Direct debit collected twice on the same mandate one day apart."
+    },
+    {
+      "type": "missing_payment",
+      "loan_id": "MC-1010030",
+      "txn_ids": [],
+      "expected_kind": "UNMATCHED_EXPECTED_PAYMENT",
+      "expected_category": "MISSING_PAYMENT",
+      "description": "Scheduled payment has no corresponding payment in the payments file."
+    }
+  ],
+  "noise": [
+    {
+      "type": "split_payment",
+      "loan_id": "MC-1010002",
+      "description": "Scheduled amount paid as two Faster Payments that net to the schedule."
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010003",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-05 -> 2026-09-07)"
+    },
+    {
+      "type": "rate_precision",
+      "loan_id": "MC-1010005",
+      "description": "Investor reports rate at 4dp, 0.004pp from servicing (within tolerance)."
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010006",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-05 -> 2026-09-07)"
+    },
+    {
+      "type": "value_date_shift",
+      "loan_id": "MC-1010017",
+      "description": "Payment received 2 days after due date (within match window)."
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010021",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-20 -> 2026-09-21)"
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010024",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-05 -> 2026-09-07)"
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010026",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-05 -> 2026-09-07)"
+    },
+    {
+      "type": "balance_rounding",
+      "loan_id": "MC-1010028",
+      "description": "Investor closing balance differs by 0.01 (rounding)."
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010033",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-20 -> 2026-09-21)"
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010035",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-05 -> 2026-09-07)"
+    },
+    {
+      "type": "loan_ref_formatting",
+      "loan_id": "MC-1010037",
+      "description": "Loan reference in payments file is lower-case with trailing space."
+    },
+    {
+      "type": "weekend_roll",
+      "loan_id": "MC-1010039",
+      "description": "Due date falls on a weekend; payment value-dated the next Monday. (2026-09-20 -> 2026-09-21)"
+    }
+  ]
+}

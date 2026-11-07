@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "recordings": [
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "7c47fd72d7a81e420f54c41db9acce9fe9a714386daad75522bc757cadb2205e",
+      "output": {
+        "category": "MISSING_PAYMENT",
+        "reason": "Engine finding UNMATCHED_EXPECTED_PAYMENT: No payment found for MC-1010030 within ±3 days of due date 2026-09-01 (scheduled 2,185.85)."
+      },
+      "label": "pair_01:D-65f7b8b7bb0a:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "69e88bb8de437552710be9bec23a7d8511df6254d44dba00a3b2b16d60e986cf",
+      "output": {
+        "category": "RATE_MARGIN_BREACH",
+        "reason": "Engine finding RATE_COMPONENT_MISMATCH: Applied rate 6.25% for MC-1010007 does not equal base 4.00% + margin 1.75% = 5.75%."
+      },
+      "label": "pair_01:D-6b6bc5839844:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "classify_exception",
+      "prompt_version": "classify.v1",
+      "cache_key": "70c28ad52640996b8f84db6fdefa55851f0861d63bbb65bb73e18498bfc7b875",
+      "output": {
+        "category": "DUPLICATE_DIRECT_DEBIT",
+        "reason": "Engine finding DUPLICATE_PAYMENT: 1 duplicate direct debit(s) totalling 1,466.23 for MC-1010008 on mandate DDM10100008: original TX101000018, duplicate(s) TX101000021."
+      },
+      "label": "pair_01:D-9e920c98368e:classify",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "37c0632b0bb34c5fc23115a38ed3e3e1a1180828201b4032269f81e7a3812695",
+      "output": {
+        "rationale": "No payment found for MC-1010030 within ±3 days of due date 2026-09-01 (scheduled 2,185.85).",
+        "remediation_note": "Contact the borrower and check the direct debit / standing order status; raise an arrears case if unpaid after the grace period.",
+        "cited_evidence": [
+          "servicing:31"
+        ]
+      },
+      "label": "pair_01:D-65f7b8b7bb0a:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "a963ee38fc57474ed2697c309d6c7aa0c0dc4698c41836b68a44947cca148d0d",
+      "output": {
+        "rationale": "Applied rate 6.25% for MC-1010007 does not equal base 4.00% + margin 1.75% = 5.75%.",
+        "remediation_note": "Correct the applied rate to base + contractual margin, recalculate interest and refund any overcharge; notify the investor of the restated rate.",
+        "cited_evidence": [
+          "servicing:8"
+        ]
+      },
+      "label": "pair_01:D-6b6bc5839844:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "draft_rationale",
+      "prompt_version": "rationale.v1",
+      "cache_key": "0d700c3a440f4fa062123fecca90d06b97981d5f3f69eb1ca5c2bcf5c6321a4c",
+      "output": {
+        "rationale": "1 duplicate direct debit(s) totalling 1,466.23 for MC-1010008 on mandate DDM10100008: original TX101000018, duplicate(s) TX101000021.",
+        "remediation_note": "Refund the duplicate collection to the borrower and raise a ticket with the DD bureau.",
+        "cited_evidence": [
+          "servicing:9",
+          "payments:18",
+          "payments:21"
+        ]
+      },
+      "label": "pair_01:D-9e920c98368e:rationale",
+      "source_model": "oracle"
+    },
+    {
+      "task": "propose_mapping",
+      "prompt_version": "mapping.v1",
+      "cache_key": "c2ef1500ada7a692454fd1ebcb757a0a180164a19683e2ed408b2cf0f6ec3323",
+      "output": {
+        "mapping": {
+          "servicing": {
+            "columns": {
+              "loan_id": "Acct No",
+              "pool_id": "Pool",
+              "due_date": "Pmt Due Dt",
+              "scheduled_amount": "Sched Pmt Amt",
+              "closing_balance": "Cur Bal",
+              "base_rate": "Base Rt %",
+              "margin": "Margin %",
+              "applied_rate": "Applied Rt %",
+              "mandate_ref": "DD Mandate"
+            },
+            "date_format": null
+          },
+          "payments": {
+            "columns": {
+              "txn_id": "TXN_ID",
+              "loan_id": "LOAN_REF",
+              "value_date": "VALUE_DATE",
+              "amount": "AMOUNT_GBP",
+              "channel": "CHANNEL",
+              "mandate_ref": "MANDATE_REF"
+            },
+            "date_format": "%d/%m/%Y"
+          },
+          "investor": {
+            "columns": {
+              "loan_id": "Loan Identifier",
+              "pool_id": "Pool",
+              "period_end": "Period End",
+              "reported_rate": "Reported Rate",
+              "reported_margin": "Reported Margin",
+              "scheduled_amount": "Scheduled P&I",
+              "closing_balance": "Closing Principal Balance"
+            },
+            "date_format": null
+          }
+        },
+        "notes": ""
+      },
+      "label": "pair_01:mapping",
+      "source_model": "oracle"
+    }
+  ]
+}

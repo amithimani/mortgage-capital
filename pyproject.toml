@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mc-recon"
+version = "0.1.0"
+description = "Mortgage Capital PoC: data reconciliation & anomaly detection agent with EU AI Act governance"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+# Week 2+ agent runtime. Exact versions get pinned in the lockfile when these land;
+# the Disseqt SDK is pinned now because the plan depends on its 0.11.2 signatures.
+agent = [
+    "langgraph>=0.2",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "openai>=1.50",
+    "disseqt-ai-sdk==0.11.2",
+]
+
+[project.scripts]
+mc-recon = "mc_recon.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mc_recon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
