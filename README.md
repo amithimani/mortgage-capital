@@ -28,10 +28,12 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 | Deterministic engine (`engine/`) | ✅ loader, mapping validation, profiling, reconciliation rules |
 | Synthetic data (`data/`) | ✅ 3 seeded pairs + error catalog + oracle LLM recordings |
 | LLM adapter (`llm/`) | ✅ provider protocol, strict output schemas, payload builders, recorded fake |
-| OpenAI provider | Week 2 |
-| LangGraph graph + checkpointer + interrupts | Week 2 |
-| FastAPI service | Week 2 |
-| Disseqt tracing + `PolicyGate` | Week 1–3 (needs credentials) |
+| LangGraph agent (`graph.py`) | ✅ all 9 nodes, SQLite checkpointer, durable interrupts, BLOCK → review → re-check loop |
+| Policy gate (`policy.py`) | ✅ interface + deterministic `FakePolicyGate`, fail-closed wrapper, input screen |
+| Run store (`store.py`) | ✅ manifests, append-only event trail + remediation log, reviews, idempotency keys |
+| FastAPI service (`api.py`, `service.py`) | ✅ plan §4 endpoints + `/events` audit trail |
+| Real LLM provider (Claude / Gemini) | Pending key; drops in behind `LLMProvider` |
+| Disseqt tracing + `DisseqtPolicyGate` | Week 1–3 (needs credentials); drops in behind `Tracer` / `PolicyGate` |
 | UC2 governance adapter | Week 2–3, after the vendor-confirmation gate |
 
 ## Quick start
@@ -40,14 +42,49 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 python -m venv .venv && source .venv/bin/activate     # Python 3.11+
 pip install -e ".[dev]"
 
-pytest                                                 # 66 tests, no network, no LLM
+pytest                                                 # 95 tests, ~1s, no network, no LLM
 mc-recon reconcile data/synthetic/pair_01 --check      # run the engine vs ground truth
 mc-recon profile   data/synthetic/pair_01              # what the mapping LLM will see
 mc-recon generate                                      # regenerate fixtures (byte-identical)
+uvicorn mc_recon.api:app                               # the agent API, on fakes
 ```
 
 `mc-recon reconcile` prints the full `ReconciliationResult` as JSON. With `--check` it compares
 the result against `seeded_errors.json` and exits non-zero on any miss or false positive.
+
+## Running the agent
+
+`uvicorn mc_recon.api:app` starts the service with the recorded fake LLM (every pair's oracle
+recordings) and `FakePolicyGate`. State lives in `var/mc_recon.sqlite`; change it with
+`MC_DB_PATH`. Datasets come from `MC_DATA_ROOT` (default `data/synthetic`). Mutating calls need
+an `X-Analyst-Id` header (a PoC stand-in for real auth) and accept `Idempotency-Key`.
+
+```bash
+H='-H X-Analyst-Id:alice -H content-type:application/json'
+RID=$(curl -s -X POST localhost:8000/runs $H -d '{"dataset":"pair_01"}' | jq -r .run_id)
+curl -s localhost:8000/runs/$RID/mapping | jq '.proposal, .problems'     # review the proposal
+curl -s -X POST localhost:8000/runs/$RID/mapping/confirm $H -d '{}'     # confirm (or send {"mapping": {...}})
+curl -s localhost:8000/runs/$RID/exceptions | jq '.[] | {id, category, status}'
+curl -s localhost:8000/runs/$RID/remediation-log | jq
+curl -s localhost:8000/runs/$RID/events | jq '.[] | {event_type, actor, subject_id}'
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /runs` | Start a run on a dataset. It stops at mapping confirmation |
+| `GET /runs/{id}` | Status, pending human action, exception counts, manifest |
+| `GET /runs/{id}/mapping` | Proposed mapping, problems with it, column profiles, input-screen findings |
+| `POST /runs/{id}/mapping/confirm` | Accept the proposal (`{}`) or supply an edited `mapping`. Validated against the headers before resuming |
+| `GET /runs/{id}/exceptions` | Exceptions with category, rationale, every policy verdict and reviews |
+| `POST /runs/{id}/exceptions/{exc}/review` | `approve` (human override) / `edit` (re-checked against the policy) / `reject` |
+| `GET /runs/{id}/remediation-log` | Final append-only log with evidence and final verdict |
+| `GET /runs/{id}/events` | Audit trail: mapping confirmation, policy verdicts, reviews, input-screen blocks |
+
+**Exception lifecycle:** `drafted` → `passed` or `blocked`. A blocked exception goes to review:
+`approve` makes it `approved_override` (logged and flagged as a human override), `edit` makes it
+`edited` and sends it back through the policy, and `reject` makes it `rejected` (not logged).
+Logged exceptions end up `logged`. When the policy gate is down, or returns a non-final async
+verdict, the result is BLOCK.
 
 ## Repository layout
 
@@ -68,6 +105,12 @@ src/mc_recon/
   data/
     synthetic.py     #   seeded generator for reconciliation pairs + error catalog
     oracle.py        #   ground-truth LLM recordings for each pair
+  graph.py           # LangGraph agent: nodes, routing, interrupts
+  service.py         # run lifecycle; validates human actions before resuming the graph
+  api.py             # FastAPI app (thin HTTP shell over RunService)
+  policy.py          # PolicyGate protocol, FakePolicyGate, fail-closed wrappers
+  store.py           # SQLite run store; append-only events + remediation log
+  observability.py   # Tracer seam (Null / InMemory; Disseqt later)
   cli.py             # `mc-recon` entry point
 data/synthetic/pair_0{1,2,3}/   # committed fixtures (regenerated byte-for-byte by tests)
 docs/IMPLEMENTATION_PLAN.md

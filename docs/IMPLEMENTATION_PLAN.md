@@ -27,6 +27,18 @@ Design addition **D2:** the deterministic engine emits structural `DiscrepancyKi
 classifier picks a business `ExceptionCategory`, but only from the set allowed for that kind
 (`constrain_category`). Anything else becomes `OTHER_NEEDS_REVIEW` and goes to a human.
 
+Implementation notes **D3–D5** (from building the graph on the fakes):
+
+- **D3:** Discrepancy ids are content hashes, so the same finding has the same id in every run.
+  The review endpoint is therefore scoped by run: `POST /runs/{run_id}/exceptions/{id}/review`.
+- **D4:** An analyst who edits the mapping submits the corrected `ColumnMapping` directly. It is
+  checked against the file headers before the graph resumes, and recorded as `mapping_edited`.
+  There is no loop back to `propose_mapping`, because a re-proposal from the same profiles would
+  produce the same answer.
+- **D5:** Each review round is a single graph interrupt listing every pending exception. Reviews
+  can arrive in any order and are stored as they come. The graph resumes once every pending
+  exception in the round has a decision.
+
 ## 1. Guiding principles
 
 1. **Hard determinism boundary.** The LLM never touches a number. It proposes mappings,
@@ -162,13 +174,13 @@ stateDiagram-v2
 |---|---|---|---|---|
 | `ingest` | Parse 3 files, hash, profile columns; input-safety screen | Code | `TOOL_EXEC` | profiling ✅ (`engine/profile.py`) |
 | `propose_mapping` | Column correspondences, structured output | LLM | `MODEL_EXEC` | payload + schema + oracle recordings ✅ |
-| `await_mapping_confirm` | Durable interrupt; approver identity recorded | Human | oversight span | Week 2 |
+| `await_mapping_confirm` | Durable interrupt; approver identity recorded | Human | oversight span | ✅ |
 | `reconcile` | Match, net, compare; typed discrepancies with row evidence | Code | `TOOL_EXEC` | ✅ (`engine/reconcile.py`) |
 | `classify_exceptions` | Closed-enum labels, constrained per kind | LLM | `MODEL_EXEC` | payload + schema + guard ✅ |
 | `draft_rationale` | Rationale + remediation note, evidence rows only | LLM | `MODEL_EXEC` | payload + schema ✅ |
-| `validate_policy` | `PolicyGate` → PASS/BLOCK, fail closed | Disseqt | Decisions-ledger entry | Week 3 |
-| `human_review_queue` | Durable interrupt for BLOCKed exceptions | Human | oversight span | Week 3 |
-| `emit_log` | Idempotent remediation log write keyed `(run_id, discrepancy.id)` | Code | `TOOL_EXEC` | Week 3 (ids are stable ✅) |
+| `validate_policy` | `PolicyGate` → PASS/BLOCK, fail closed | Disseqt | Decisions-ledger entry | ✅ on `FakePolicyGate`; Disseqt gate Week 3 |
+| `human_review_queue` | Durable interrupt for BLOCKed exceptions | Human | oversight span | ✅ |
+| `emit_log` | Idempotent remediation log write keyed `(run_id, discrepancy.id)` | Code | `TOOL_EXEC` | ✅ append-only |
 
 **"PII checks", re-specified:**
 - **Ingest-time screen:** `InputPromptInjectionValidator` plus an input-side leakage check (C6)
@@ -275,7 +287,7 @@ slip in behind the ingest interface.
 | Week | Use Case 1 | Use Case 2 |
 |---|---|---|
 | **1** | ✅ Deterministic engine + unit tests; ✅ synthetic data + seeded-error catalog; ✅ LLM adapter protocol + recorded fake. Remaining: register application (`application_id`); wire `DisseqtAgenticClient` and verify spans land; confirm `validate(policies=…)` request/response shape live (C2); manual-process baseline | Vendor-confirmation gate; decide confirmed-API vs. interim-store path |
-| **2** | LangGraph graph with checkpointer + mapping interrupt; `OpenAIProvider`; mapping and classification nodes; FastAPI run/approval endpoints | Register the governed system or stand up the interim store; confirm `risk_level`/`provider_role`/retention |
+| **2** | ✅ LangGraph graph (all nodes) with SQLite checkpointer + both interrupts; ✅ FastAPI endpoints; ✅ run store; ✅ fake policy gate + review loop. Remaining: real LLM provider (Claude or Gemini, pending key) | Register the governed system or stand up the interim store; confirm `risk_level`/`provider_role`/retention |
 | **3** | Rationale drafting; span instrumentation; author + publish the policies (sync); `PolicyGate`; BLOCK review queue with re-check (D1); remediation log; golden suite in CI | Wire the three controls through the adapter; verify span → evidence → control status |
 | **4** | Hardening: crash-resume, idempotency, fail-closed outage test, live-model drift run; dashboard walkthrough | Evidence freshness; coverage-gap review; generate the report; demo |
 
