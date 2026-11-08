@@ -10,6 +10,8 @@ An AI-assisted reconciliation agent for mortgage servicing data, with EU AI Act 
 It surfaces exceptions such as missing payments, duplicate direct debits and rate-vs-margin
 breaches, each with row-level evidence, a drafted rationale and a remediation note.
 
+This is **Use Case 1** of the Disseqt FDE exercise. **[docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md)**
+maps every requirement in the brief to code, with the open gaps and the access needed.
 See **[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)** for the full design,
 timeline and the verified Disseqt SDK surface.
 
@@ -35,7 +37,7 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 | Container image | ✅ hardened, hash-locked, smoke-tested (CI workflow in `deploy/ci/`); Kubernetes manifest — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | Real LLM provider (Claude / Gemini) | Pending key; drops in behind `LLMProvider` |
 | Disseqt tracing + `DisseqtPolicyGate` | Week 1–3 (needs credentials); drops in behind `Tracer` / `PolicyGate` |
-| UC2 governance adapter | Week 2–3, after the vendor-confirmation gate |
+| UC2 governance layer | Out of scope for the exercise (UC1 chosen); UC1 already emits its evidence |
 
 ## Quick start
 

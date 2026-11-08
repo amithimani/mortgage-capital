@@ -3,6 +3,11 @@
 **Use Case 1:** Data Reconciliation & Anomaly Detection agent (LangGraph + FastAPI)
 **Use Case 2:** Risk, Policy & Regulatory Compliance layer (EU AI Act Arts. 12, 14, 15)
 
+> **Scope for this exercise: Use Case 1.** The brief asks for one of the two use cases. UC1 is
+> implemented. UC2 is kept below as the design it would plug into, since UC1 already emits the
+> evidence UC2 needs. Requirement-by-requirement status, gaps and the access list are in
+> [BRIEF_TRACEABILITY.md](BRIEF_TRACEABILITY.md).
+
 ## Change log
 
 **v2.1 (this version)** — the Disseqt SDK surface was checked against the source of the
@@ -14,7 +19,7 @@ pinned package, `disseqt-ai-sdk==0.11.2` (wheel contents, not the README). Corre
 | C2 | `evaluate_policy(...)`, `parse_policy()` | Neither exists. Policies run through `disseqt_sdk.Client.validate(request, policies=[...])`; helpers are `disseqt_sdk.policy.parse / is_blocking / is_async` and `disseqt_sdk.any_blocking` | `PolicyGate` wraps `validate` + `parse` |
 | C3 | Binding the exception policy as the tracer's `realtime_policy_id` gates output | That only tags spans with `policy.id` so the server checks them **after the fact**. It does not block anything | The `validate_policy` node calls `validate()` synchronously. The tracer gets no policy, or a separate monitoring-only one, so exceptions aren't evaluated twice |
 | C4 | Async results can be acted on | `enforcement: async` responses aren't final (`is_async`) | Exception policy must be **sync**; an async response counts as BLOCK (fail closed) |
-| C5 | `ToolCallAccuracy` / `PlanCoherence` in the per-exception policy | These are agent-behaviour validators expecting `tool_calls` / `conversation_history` / `agent_responses` | Move them to a run-level, monitoring-only policy |
+| C5 | `ToolCallAccuracy` / `PlanCoherence` in the per-exception policy | These are agent-behaviour validators expecting `tool_calls` / `conversation_history` / `agent_responses` | Evaluate them on the run's trajectory (the ordered tool calls), which is what the brief asks: "did the agent call the engine correctly and in order" |
 | C6 | `DataLeakageValidator` in the ingest screen | It's in the **MCP-security** domain | Confirm the right input-side leakage validator with Disseqt in Week 1 |
 | C7 | Python ≥ 3.10 | `Requires-Python >=3.10.14` | Project targets 3.11+ |
 | C8 | — | Policy evaluation needs `application_name` on `disseqt_sdk.Client` (it labels the Decisions ledger) | Set `application_name="mc-reconciliation-agent"` (same as `service_name`) |
@@ -49,7 +54,7 @@ Implementation notes **D3–D5** (from building the graph on the fakes):
 3. **Audit evidence is emitted, not reconstructed.** The compliance report is a query over
    evidence written at execution time.
 4. **Every non-deterministic dependency sits behind an interface.** LLM calls go through a
-   provider-agnostic adapter with a deterministic fake. UC2's unverified governance surface goes
+   provider-agnostic adapter with a deterministic fake. UC2's governance touchpoints go
    behind a governance adapter.
 
 ## 2. Architecture overview
@@ -74,7 +79,7 @@ flowchart LR
         I[Applications Registry<br/>issues application_id]
         J[Dashboard: traces, Decisions<br/>ledger, scores, cost]
     end
-    subgraph Unverified["Disseqt governance (vendor-confirmation gated)"]
+    subgraph Governance["Disseqt governance (confirm API shape with platform access)"]
         L[AI system registry · controls ·<br/>control tests · evidence records]
     end
     A --> B --> C
@@ -247,13 +252,13 @@ UC2 adds no new agent behaviour, only registration, wiring and reporting over UC
 **Verified foundation:** the Applications Registry (issues `application_id`), Disseqt's published
 EU AI Act article mapping, compliance dashboards, and decision logs.
 
-**Not publicly verifiable:** the control-ID scheme (`TECHRAGGROUNDINGCITE`, `TECHHUMANLOOP`,
-`TECHLOGPIPELINE`), `metric_threshold` control tests evidenced by `sdk_event`, evidence records
-with freshness SLAs, and a governance registry with `risk_level` / `lifecycle_stage` /
-`provider_role`. That registry shape matches Brutor AI's asset-registry docs rather than anything
-public from Disseqt.
+**To confirm with platform access:** the governance surface the brief describes (AI system
+registry with `risk_level` / `lifecycle_stage` / `provider_role`, controls such as
+`TECH-RAG-GROUNDING-CITE`, `TECH-HUMAN-LOOP` and `TECH-LOG-PIPELINE`, `metric_threshold`
+control tests evidenced by `sdk_event`, and evidence records with freshness SLAs) is documented
+behind the platform login, which isn't public. The API shapes get confirmed there before wiring.
 
-1. **Week 1 gate: vendor confirmation** against the gated platform docs.
+1. **Week 1: confirm the governance API shapes** against the platform docs.
 2. **Governance adapter:** all UC2 platform touchpoints go through one thin module of ours.
 3. **Fallback that keeps the deliverable:** if a governance object doesn't exist as proposed, the
    adapter writes the same evidence to an interim store of ours. The Compliance, Governance and
@@ -286,15 +291,15 @@ slip in behind the ingest interface.
 
 | Week | Use Case 1 | Use Case 2 |
 |---|---|---|
-| **1** | ✅ Deterministic engine + unit tests; ✅ synthetic data + seeded-error catalog; ✅ LLM adapter protocol + recorded fake. Remaining: register application (`application_id`); wire `DisseqtAgenticClient` and verify spans land; confirm `validate(policies=…)` request/response shape live (C2); manual-process baseline | Vendor-confirmation gate; decide confirmed-API vs. interim-store path |
+| **1** | ✅ Deterministic engine + unit tests; ✅ synthetic data + seeded-error catalog; ✅ LLM adapter protocol + recorded fake. Remaining: register application (`application_id`); wire `DisseqtAgenticClient` and verify spans land; confirm `validate(policies=…)` request/response shape live (C2); manual-process baseline | Confirm governance API shapes; decide platform-API vs. interim-store path |
 | **2** | ✅ LangGraph graph (all nodes) with SQLite checkpointer + both interrupts; ✅ FastAPI endpoints; ✅ run store; ✅ fake policy gate + review loop. Remaining: real LLM provider (Claude or Gemini, pending key) | Register the governed system or stand up the interim store; confirm `risk_level`/`provider_role`/retention |
 | **3** | Rationale drafting; span instrumentation; author + publish the policies (sync); `PolicyGate`; BLOCK review queue with re-check (D1); remediation log; golden suite in CI | Wire the three controls through the adapter; verify span → evidence → control status |
 | **4** | Hardening: crash-resume, idempotency, fail-closed outage test, live-model drift run; dashboard walkthrough | Evidence freshness; coverage-gap review; generate the report; demo |
 
 ## 10. Risks and open questions
 
-- **Governance surface mismatch** (highest UC2 risk): mitigated by the Week 1 gate and the
-  adapter + interim store.
+- **Governance API shapes** (UC2): confirmed against the platform docs in Week 1. The
+  adapter + interim store keep the report deliverable independent of the exact API.
 - **SDK version drift:** C1–C8 show the README, PyPI metadata and the code disagree. The SDK is
   pinned at `0.11.2`. Re-verify signatures against the wheel on every upgrade.
 - **Double evaluation** (C3): if the same policy is bound to both the tracer and `PolicyGate`,
