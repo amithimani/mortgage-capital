@@ -31,7 +31,9 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 | Synthetic data (`data/`) | ✅ 3 seeded pairs + error catalog + oracle LLM recordings |
 | LLM adapter (`llm/`) | ✅ provider protocol, strict output schemas, payload builders, recorded fake |
 | LangGraph agent (`graph.py`) | ✅ all 9 nodes, SQLite checkpointer, durable interrupts, BLOCK → review → re-check loop |
-| Policy gate (`policy.py`) | ✅ interface + deterministic `FakePolicyGate`, fail-closed wrapper, input screen |
+| Policy gate (`policy.py`) | ✅ fakes for every validator in the brief (faithfulness, context and answer relevance, tool-call accuracy, plan coherence, injection, PII), fail closed |
+| Remediation (`remediation.py`) | ✅ deterministic owner, priority P1–P3, SLA, amount at risk |
+| Baseline + metrics (`baseline.py`, `metrics.py`) | ✅ Week 1 baseline harness; per-run and cross-run analytics with drift |
 | Run store (`store.py`) | ✅ manifests, append-only event trail + remediation log, reviews, idempotency keys |
 | FastAPI service (`api.py`, `service.py`) | ✅ plan §4 endpoints + `/events` audit trail |
 | Container image | ✅ hardened, hash-locked, smoke-tested (CI workflow in `deploy/ci/`); Kubernetes manifest — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
@@ -45,7 +47,7 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 python -m venv .venv && source .venv/bin/activate     # Python 3.11+
 pip install -e ".[dev]"
 
-pytest                                                 # 104 tests, ~1s, no network, no LLM
+pytest                                                 # 126 tests, ~2s, no network, no LLM
 mc-recon reconcile data/synthetic/pair_01 --check      # run the engine vs ground truth
 mc-recon profile   data/synthetic/pair_01              # what the mapping LLM will see
 mc-recon generate                                      # regenerate fixtures (byte-identical)
@@ -96,7 +98,11 @@ curl -s localhost:8000/runs/$RID/events | jq '.[] | {event_type, actor, subject_
 | `GET /runs/{id}/exceptions` | Exceptions with category, rationale, every policy verdict and reviews |
 | `POST /runs/{id}/exceptions/{exc}/review` | `approve` (human override) / `edit` (re-checked against the policy) / `reject` |
 | `GET /runs/{id}/remediation-log` | Final append-only log with evidence and final verdict |
-| `GET /runs/{id}/events` | Audit trail: mapping confirmation, policy verdicts, reviews, input-screen blocks |
+| `GET /runs/{id}/events` | Audit trail: mapping confirmation, policy and trajectory verdicts, reviews, input-screen blocks |
+| `GET /runs/{id}/trajectory` | Ordered steps the agent took (scored by tool-call-accuracy and plan-coherence) |
+| `GET /runs/{id}/metrics` | Latency per step, human wait, LLM calls, tokens and cost, PASS/BLOCK, per-validator scores, owner and priority mix, drift vs baseline |
+| `GET /metrics` | The same across all runs (p50/p95 latency, pooled validator pass rates) |
+| `POST /baselines`, `GET /baselines/latest` | Week 1 baseline: manual-process notes through the same checks |
 
 **Exception lifecycle:** `drafted` → `passed` or `blocked`. A blocked exception goes to review:
 `approve` makes it `approved_override` (logged and flagged as a human override), `edit` makes it

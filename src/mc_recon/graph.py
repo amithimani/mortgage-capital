@@ -11,6 +11,10 @@ State holds only JSON-native values (dicts/lists/str), so checkpoints are portab
 depend on pickling our classes. Dependencies (LLM, policy gate, store, tracer) come in through
 :class:`AgentDeps`; nothing in here knows whether they are fakes.
 
+``trajectory`` is an append-only list (LangGraph reducer) with one entry per step: what ran and
+with which inputs. The tool-call-accuracy and plan-coherence validators score it, and it is
+recorded in the run's audit trail.
+
 Interrupt payloads (what the API shows a human) and resume values (what it sends back):
 
 * ``mapping_confirmation`` → ``{"analyst": str, "mapping": ColumnMapping-json | None}``
@@ -20,9 +24,11 @@ Interrupt payloads (what the API shows a human) and resume values (what it sends
 
 from __future__ import annotations
 
+import hashlib
+import operator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -31,10 +37,8 @@ from .engine import (
     ENGINE_VERSION,
     ColumnMapping,
     Discrepancy,
-    DiscrepancyKind,
     EngineInputError,
     FileProfile,
-    MappingError,
     ReconConfig,
     Source,
     constrain_category,
@@ -54,9 +58,18 @@ from .llm import (
     mapping_request,
     rationale_request,
 )
+from .llm.prompts import render_messages
 from .llm.provider import T, canonical_json
 from .observability import NullTracer, Tracer
-from .policy import PolicyGate, PolicySubject, evaluate_fail_closed, screen_fail_closed
+from .policy import (
+    PolicyGate,
+    PolicySubject,
+    combine,
+    evaluate_fail_closed,
+    evaluate_run_fail_closed,
+    screen_fail_closed,
+)
+from .remediation import assign
 from .store import RunStore
 
 SYSTEM_ACTOR = "agent"
@@ -71,7 +84,7 @@ LOGGABLE = frozenset({PASSED, APPROVED_OVERRIDE})
 
 
 class InputScreenError(EngineInputError):
-    """A column *header* failed the input screen — headers can't be withheld, so stop."""
+    """A column *header* failed the input screen. Headers can't be withheld, so stop."""
 
 
 class RunState(TypedDict, total=False):
@@ -89,6 +102,7 @@ class RunState(TypedDict, total=False):
     discrepancies: list[dict]
     exceptions: dict[str, dict]
     review_round: int
+    trajectory: Annotated[list[dict], operator.add]
     status: str
 
 
@@ -113,6 +127,10 @@ def _headers(state: RunState) -> dict[Source, list[str]]:
     return {Source(p["source"]): [c["name"] for c in p["columns"]] for p in state["profiles"]}
 
 
+def mapping_sha(mapping: dict) -> str:
+    return hashlib.sha256(canonical_json(mapping).encode()).hexdigest()[:16]
+
+
 def evidence_keys(exc: dict) -> list[str]:
     return [f"{e['source']}:{e['row']}" for e in exc["evidence"]]
 
@@ -132,8 +150,9 @@ def policy_subject(exc: dict) -> PolicySubject:
     return PolicySubject(
         exception_id=exc["id"],
         loan_id=exc["loan_id"],
+        category=exc.get("category"),
         prompt=(
-            f"Explain reconciliation exception {exc['id']} ({exc['category']}) and propose "
+            f"Explain reconciliation exception {exc['id']} ({exc.get('category')}) and propose "
             "remediation using only the supplied evidence."
         ),
         context=context,
@@ -155,6 +174,7 @@ def build_graph(deps: AgentDeps) -> StateGraph:
     def call_llm(run_id: str, node: str, request: LLMRequest, schema: type[T]) -> T:
         """One structured call with a bounded re-ask on schema-invalid output."""
         attempts = deps.max_reasks + 1
+        messages = render_messages(request)
         for attempt in range(1, attempts + 1):
             with tracer.span(
                 run_id,
@@ -164,19 +184,24 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 prompt_version=request.prompt_version,
                 cache_key=request.cache_key,
                 model_id=llm.model_id,
+                temperature=request.temperature,
                 attempt=attempt,
+                input_messages=messages,
             ) as span:
                 try:
                     result = llm.generate(request, schema)
-                except LLMOutputValidationError:
-                    span.set(outcome="invalid_output")
+                except LLMOutputValidationError as exc:
+                    span.set(outcome="invalid_output", error=str(exc)[:500])
                     if attempt == attempts:
                         raise
                     continue
                 span.set(
                     outcome="ok",
+                    model_id=result.model_id,
                     input_tokens=result.usage.input_tokens,
                     output_tokens=result.usage.output_tokens,
+                    tokens_estimated=result.usage.estimated,
+                    output_message=result.output.model_dump(mode="json"),
                 )
                 return result.output
         raise AssertionError("unreachable")
@@ -185,7 +210,7 @@ def build_graph(deps: AgentDeps) -> StateGraph:
 
     def ingest(state: RunState) -> RunState:
         run_id = state["run_id"]
-        with tracer.span(run_id, "ingest", "TOOL_EXEC") as span:
+        with tracer.span(run_id, "ingest", "TOOL_EXEC", tool="parse_and_profile") as span:
             profiles, findings = [], []
             for source, path in _paths(state).items():
                 profile = profile_csv(path, source).model_dump(mode="json")
@@ -202,6 +227,9 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                             {
                                 "source": source.value,
                                 "column": col["name"],
+                                "failed_rules": [
+                                    r.validator for r in verdict.rules if r.status == "FAIL"
+                                ],
                                 "verdict": verdict.model_dump(mode="json"),
                             }
                         )
@@ -218,18 +246,37 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 )
             store.update_run(run_id, status="ingested", manifest={"file_hashes": hashes})
             span.set(files=len(profiles), screen_blocks=len(findings))
-        return {"profiles": profiles, "file_hashes": hashes, "input_screen": findings}
+        return {
+            "profiles": profiles,
+            "file_hashes": hashes,
+            "input_screen": findings,
+            "trajectory": [
+                {
+                    "step": "ingest",
+                    "tool": "parse_and_profile",
+                    "file_hashes": hashes,
+                    "screen_blocks": len(findings),
+                }
+            ],
+        }
 
     def propose_mapping(state: RunState) -> RunState:
         profiles = [FileProfile.model_validate(p) for p in state["profiles"]]
-        proposal = call_llm(
-            state["run_id"], "propose_mapping", mapping_request(profiles), MappingProposal
-        )
+        request = mapping_request(profiles)
+        proposal = call_llm(state["run_id"], "propose_mapping", request, MappingProposal)
         problems = proposal.mapping.problems(_headers(state))
         return {
             "mapping_proposal": proposal.model_dump(mode="json"),
             "mapping_problems": problems,
             "status": "awaiting_mapping_confirmation",
+            "trajectory": [
+                {
+                    "step": "propose_mapping",
+                    "tool": "llm",
+                    "cache_key": request.cache_key,
+                    "problems": len(problems),
+                }
+            ],
         }
 
     def await_mapping_confirm(state: RunState) -> RunState:
@@ -246,27 +293,49 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         edited = answer.get("mapping")
         mapping = ColumnMapping.model_validate(edited or state["mapping_proposal"]["mapping"])
         mapping.validate_against(_headers(state))  # API pre-validates; this is the backstop
-        with tracer.span(run_id, "await_mapping_confirm", "OVERSIGHT", analyst=analyst):
+        mapping_json = mapping.model_dump(mode="json")
+        with tracer.span(
+            run_id,
+            "await_mapping_confirm",
+            "OVERSIGHT",
+            analyst=analyst,
+            decision="edited" if edited else "confirmed",
+        ):
             store.record_event(
                 run_id,
                 "mapping_edited" if edited else "mapping_confirmed",
                 analyst,
-                {
-                    "mapping": mapping.model_dump(mode="json"),
-                    "proposal_problems": state["mapping_problems"],
-                },
+                {"mapping": mapping_json, "proposal_problems": state["mapping_problems"]},
                 dedupe_key=f"{run_id}:mapping",
             )
         return {
-            "mapping": mapping.model_dump(mode="json"),
+            "mapping": mapping_json,
             "mapping_confirmed_by": analyst,
             "status": "reconciling",
+            "trajectory": [
+                {
+                    "step": "await_mapping_confirm",
+                    "tool": "human",
+                    "analyst": analyst,
+                    "edited": bool(edited),
+                    "mapping_sha": mapping_sha(mapping_json),
+                }
+            ],
         }
 
     def reconcile_node(state: RunState) -> RunState:
         run_id = state["run_id"]
-        with tracer.span(run_id, "reconcile", "TOOL_EXEC", engine_version=ENGINE_VERSION) as span:
-            inputs = load_inputs(_paths(state), ColumnMapping.model_validate(state["mapping"]))
+        mapping = ColumnMapping.model_validate(state["mapping"])
+        used_sha = mapping_sha(mapping.model_dump(mode="json"))
+        with tracer.span(
+            run_id,
+            "reconcile",
+            "TOOL_EXEC",
+            tool="reconciliation_engine",
+            engine_version=ENGINE_VERSION,
+            mapping_sha=used_sha,
+        ) as span:
+            inputs = load_inputs(_paths(state), mapping)
             hashes = {s.value: h for s, h in inputs.file_hashes.items()}
             if hashes != state["file_hashes"]:
                 raise EngineInputError("input files changed between ingest and reconcile")
@@ -285,6 +354,16 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         return {
             "discrepancies": [d.model_dump(mode="json") for d in result.discrepancies],
             "recon_stats": result.stats,
+            "trajectory": [
+                {
+                    "step": "reconcile",
+                    "tool": "reconciliation_engine",
+                    "engine_version": result.engine_version,
+                    "mapping_sha": used_sha,
+                    "file_hashes": hashes,
+                    "discrepancies": len(result.discrepancies),
+                }
+            ],
         }
 
     def classify_exceptions(state: RunState) -> RunState:
@@ -303,11 +382,17 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 "proposed_category": out.category.value,
                 "category": category.value,
                 "classification_reason": out.reason,
+                **assign(raw, category.value),
                 "status": DRAFTED,
                 "verdicts": [],
                 "reviews": [],
             }
-        return {"exceptions": exceptions}
+        return {
+            "exceptions": exceptions,
+            "trajectory": [
+                {"step": "classify_exceptions", "tool": "llm", "count": len(exceptions)}
+            ],
+        }
 
     def draft_rationale(state: RunState) -> RunState:
         exceptions = {k: dict(v) for k, v in state["exceptions"].items()}
@@ -324,18 +409,40 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 remediation_note=out.remediation_note,
                 cited_evidence=out.cited_evidence,
             )
-        return {"exceptions": exceptions, "status": "validating"}
+        return {
+            "exceptions": exceptions,
+            "status": "validating",
+            "trajectory": [{"step": "draft_rationale", "tool": "llm", "count": len(exceptions)}],
+        }
 
     def validate_policy(state: RunState) -> RunState:
         run_id = state["run_id"]
         exceptions = {k: dict(v) for k, v in state["exceptions"].items()}
+        trajectory = state.get("trajectory", [])
+        with tracer.span(run_id, "validate_run_trajectory", "TOOL_EXEC") as span:
+            run_verdict = evaluate_run_fail_closed(gate, trajectory)
+            span.set(decision=run_verdict.decision, steps=[t["step"] for t in trajectory])
+        store.record_event(
+            run_id,
+            "trajectory_verdict",
+            SYSTEM_ACTOR,
+            {"steps": [t["step"] for t in trajectory], **run_verdict.model_dump(mode="json")},
+            dedupe_key=f"{run_id}:trajectory:{len(trajectory)}",
+        )
+        evaluated = 0
         for exc_id in sorted(exceptions):
             exc = exceptions[exc_id]
             if exc["status"] not in NEEDS_VALIDATION:
                 continue
             with tracer.span(run_id, "validate_policy", "TOOL_EXEC", exception_id=exc_id) as span:
-                verdict = evaluate_fail_closed(gate, policy_subject(exc))
-                span.set(decision=verdict.decision, policy_version=verdict.policy_version)
+                verdict = combine(evaluate_fail_closed(gate, policy_subject(exc)), run_verdict)
+                span.set(
+                    decision=verdict.decision,
+                    policy_id=verdict.policy_id,
+                    policy_version=verdict.policy_version,
+                    scores={r.validator: r.score for r in verdict.rules},
+                )
+            evaluated += 1
             attempt = len(exc["verdicts"]) + 1
             exc["verdicts"] = [*exc["verdicts"], verdict.model_dump(mode="json")]
             exc["status"] = BLOCKED if verdict.blocked else PASSED
@@ -347,17 +454,31 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 subject_id=exc_id,
                 dedupe_key=f"{run_id}:verdict:{exc_id}:{attempt}",
             )
-        policy_ids = sorted({v["policy_id"] for e in exceptions.values() for v in e["verdicts"]})
-        versions = sorted(
-            {
-                f"{v['policy_id']}@{v['policy_version']}"
-                for e in exceptions.values()
-                for v in e["verdicts"]
-                if v["policy_version"] is not None
-            }
+        all_verdicts = [v for e in exceptions.values() for v in e["verdicts"]]
+        store.update_run(
+            run_id,
+            manifest={
+                "policy_ids": sorted({v["policy_id"] for v in all_verdicts}),
+                "policy_versions": sorted(
+                    {
+                        f"{v['policy_id']}@{v['policy_version']}"
+                        for v in all_verdicts
+                        if v["policy_version"] is not None
+                    }
+                ),
+            },
         )
-        store.update_run(run_id, manifest={"policy_ids": policy_ids, "policy_versions": versions})
-        return {"exceptions": exceptions}
+        return {
+            "exceptions": exceptions,
+            "trajectory": [
+                {
+                    "step": "validate_policy",
+                    "tool": "policy_gate",
+                    "evaluated": evaluated,
+                    "run_decision": run_verdict.decision,
+                }
+            ],
+        }
 
     def human_review_queue(state: RunState) -> RunState:
         run_id = state["run_id"]
@@ -375,11 +496,18 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         missing = set(pending) - set(decisions)
         if missing:
             raise ValueError(f"review round {round_} is missing decisions for {sorted(missing)}")
+        actions: dict[str, int] = {}
         for exc_id in pending:
             exc, dec = exceptions[exc_id], decisions[exc_id]
             action, analyst = dec["action"], dec["analyst"]
+            actions[action] = actions.get(action, 0) + 1
             with tracer.span(
-                run_id, "human_review", "OVERSIGHT", exception_id=exc_id, action=action
+                run_id,
+                "human_review",
+                "OVERSIGHT",
+                exception_id=exc_id,
+                action=action,
+                analyst=analyst,
             ):
                 if action == "approve":
                     exc["status"] = APPROVED_OVERRIDE
@@ -400,30 +528,41 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                     subject_id=exc_id,
                     dedupe_key=f"{run_id}:review:{exc_id}:{round_}",
                 )
-        return {"exceptions": exceptions, "review_round": round_}
+        return {
+            "exceptions": exceptions,
+            "review_round": round_,
+            "trajectory": [
+                {"step": "human_review_queue", "tool": "human", "round": round_, **actions}
+            ],
+        }
 
     def emit_log(state: RunState) -> RunState:
         run_id = state["run_id"]
         exceptions = {k: dict(v) for k, v in state["exceptions"].items()}
         written = 0
-        with tracer.span(run_id, "emit_log", "TOOL_EXEC") as span:
+        with tracer.span(run_id, "emit_log", "TOOL_EXEC", tool="exception_writer") as span:
             for exc_id in sorted(exceptions):
                 exc = exceptions[exc_id]
                 if exc["status"] not in LOGGABLE:
                     continue
-                final = exc["verdicts"][-1]
                 entry = {
                     "run_id": run_id,
                     "exception_id": exc_id,
                     "loan_id": exc["loan_id"],
                     "kind": exc["kind"],
                     "category": exc["category"],
+                    "owner": exc["owner"],
+                    "priority": exc["priority"],
+                    "sla_business_days": exc["sla_business_days"],
+                    "amount_at_risk": exc["amount_at_risk"],
+                    "amount_basis": exc["amount_basis"],
+                    "priority_reason": exc["priority_reason"],
                     "summary": exc["summary"],
                     "rationale": exc["rationale"],
                     "remediation_note": exc["remediation_note"],
                     "evidence": exc["evidence"],
                     "cited_evidence": exc["cited_evidence"],
-                    "final_verdict": final,
+                    "final_verdict": exc["verdicts"][-1],
                     "human_override": exc["status"] == APPROVED_OVERRIDE,
                     "reviews": exc["reviews"],
                 }
@@ -478,12 +617,11 @@ def manifest_base(dataset: str, llm: LLMProvider) -> dict[str, Any]:
 
 __all__ = [
     "AgentDeps",
-    "DiscrepancyKind",
     "InputScreenError",
-    "MappingError",
     "RunState",
     "build_graph",
     "evidence_keys",
     "manifest_base",
+    "mapping_sha",
     "policy_subject",
 ]

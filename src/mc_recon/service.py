@@ -24,9 +24,12 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from . import metrics as metrics_mod
+from .baseline import has_notes, run_baseline
 from .data.synthetic import FILE_NAMES
 from .engine import ColumnMapping, Source
 from .graph import AgentDeps, build_graph, manifest_base
+from .observability import StoreExporter
 
 _DATASET = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
@@ -87,6 +90,7 @@ class RunService:
         self.deps = deps
         self.store = deps.store
         self.data_root = Path(data_root).resolve()
+        deps.tracer.add_exporter(StoreExporter(self.store))  # spans feed /metrics
         self.graph = build_graph(deps).compile(checkpointer=checkpointer or InMemorySaver())
         self._locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
@@ -122,9 +126,19 @@ class RunService:
         return interrupts[0].value if interrupts else None
 
     def _drive(self, run_id: str, payload: Any) -> None:
-        """Invoke or resume the graph, then derive the run status from where it stopped."""
+        """Invoke or resume the graph, then derive the run status from where it stopped.
+
+        Each invocation is one ``AGENT_EXEC`` span; node spans nest under it. A run that
+        pauses for a human has one ``AGENT_EXEC`` per segment.
+        """
+        segment = "resume" if isinstance(payload, Command) else "start"
         try:
-            self.graph.invoke(payload, self._config(run_id))
+            with self.deps.tracer.span(
+                run_id, "agent_run", "AGENT_EXEC", segment=segment, model_id=self.deps.llm.model_id
+            ) as span:
+                self.graph.invoke(payload, self._config(run_id))
+                pending = self._interrupt(run_id)
+                span.set(stopped_at=pending["type"] if pending else "completed")
         except Exception as exc:
             self.store.update_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
             raise ServiceError(f"run {run_id} failed: {exc}") from exc
@@ -232,3 +246,57 @@ class RunService:
     def events(self, run_id: str) -> list[dict]:
         self._require_run(run_id)
         return self.store.events(run_id)
+
+    # --- baseline + metrics ----------------------------------------------------------------
+
+    def run_baseline(self, analyst: str, label: str, datasets: list[str] | None = None) -> dict:
+        """Week 1 baseline: manual-process notes through the same gate; stored for drift."""
+        if datasets:
+            dirs = []
+            for name in datasets:
+                self._resolve_dataset(name)
+                if not has_notes(self.data_root / name):
+                    raise Invalid(f"dataset {name!r} has no manual_process_notes.json")
+                dirs.append(self.data_root / name)
+        else:
+            dirs = sorted(d for d in self.data_root.iterdir() if d.is_dir() and has_notes(d))
+        if not dirs:
+            raise Invalid("no datasets with manual_process_notes.json under the data root")
+        report = run_baseline(dirs, self.deps.gate, self.deps.recon_config)
+        baseline_id = f"bl-{uuid.uuid4().hex[:12]}"
+        self.store.save_baseline(baseline_id, label, analyst, report["summary"], report["results"])
+        return self.store.latest_baseline() | {"baseline_id": baseline_id}
+
+    def latest_baseline(self) -> dict:
+        baseline = self.store.latest_baseline()
+        if baseline is None:
+            raise NotFound("no baseline recorded yet; POST /baselines first")
+        return baseline
+
+    def _exceptions_of(self, run_id: str) -> list[dict]:
+        values = self._state(run_id).values or {}
+        return list(values.get("exceptions", {}).values())
+
+    def metrics(self, run_id: str) -> dict:
+        run = self._require_run(run_id)
+        return metrics_mod.run_metrics(
+            run,
+            self.store.spans(run_id),
+            self._exceptions_of(run_id),
+            self.store.latest_baseline(),
+        )
+
+    def metrics_summary(self) -> dict:
+        runs = self.store.list_runs()
+        per_run, first = [], []
+        for run in runs:
+            exceptions = self._exceptions_of(run["run_id"])
+            per_run.append(
+                metrics_mod.run_metrics(run, self.store.spans(run["run_id"]), exceptions, None)
+            )
+            first.extend(e["verdicts"][0] for e in exceptions if e.get("verdicts"))
+        return metrics_mod.summary_metrics(per_run, first, self.store.latest_baseline())
+
+    def trajectory(self, run_id: str) -> list[dict]:
+        self._require_run(run_id)
+        return (self._state(run_id).values or {}).get("trajectory", [])

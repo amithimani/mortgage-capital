@@ -32,6 +32,12 @@ class StartRun(BaseModel):
     dataset: str
 
 
+class StartBaseline(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = "week-1 baseline"
+    datasets: list[str] | None = None
+
+
 class ConfirmMapping(BaseModel):
     model_config = ConfigDict(extra="forbid")
     mapping: dict | None = None
@@ -144,6 +150,33 @@ def create_app(service: RunService) -> FastAPI:
     @app.get("/runs/{run_id}/remediation-log")
     def remediation_log(run_id: str) -> list[dict]:
         return service.remediation_log(run_id)
+
+    @app.get("/runs/{run_id}/metrics")
+    def run_metrics(run_id: str) -> dict:
+        return service.metrics(run_id)
+
+    @app.get("/runs/{run_id}/trajectory")
+    def trajectory(run_id: str) -> list[dict]:
+        return service.trajectory(run_id)
+
+    @app.get("/metrics")
+    def metrics_summary() -> dict:
+        return service.metrics_summary()
+
+    @app.post("/baselines", status_code=201)
+    def start_baseline(body: StartBaseline, analyst: Analyst, idem: IdemKey = None) -> JSONResponse:
+        return idempotent(
+            idem,
+            "baseline",
+            analyst,
+            body.model_dump(),
+            201,
+            lambda: service.run_baseline(analyst, body.label, body.datasets),
+        )
+
+    @app.get("/baselines/latest")
+    def latest_baseline() -> dict:
+        return service.latest_baseline()
 
     @app.get("/runs/{run_id}/events")
     def events(run_id: str) -> list[dict]:

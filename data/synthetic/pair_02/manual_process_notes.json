@@ -1,0 +1,71 @@
+{
+  "generator_version": "1",
+  "pair": "pair_02",
+  "simulated": true,
+  "notes": [
+    {
+      "note_id": "pair_02-MN01",
+      "loan_id": "MC-2020010",
+      "category": "MISSING_PAYMENT",
+      "rationale": "No payment from MC-2020010 this month, roughly \u00a31,800 outstanding.",
+      "remediation_note": "Chase the borrower and check the DD mandate.",
+      "cited_evidence": [
+        "servicing:11"
+      ],
+      "minutes_spent": 27
+    },
+    {
+      "note_id": "pair_02-MN02",
+      "loan_id": "MC-2020014",
+      "category": "DUPLICATE_DIRECT_DEBIT",
+      "rationale": "MC-2020014 looks double debited, about \u00a31,200 each time.",
+      "remediation_note": "Refund the second collection to the borrower.",
+      "cited_evidence": [
+        "servicing:15"
+      ],
+      "minutes_spent": 9
+    },
+    {
+      "note_id": "pair_02-MN03",
+      "loan_id": "MC-2020033",
+      "category": "RATE_MARGIN_BREACH",
+      "rationale": "MC-2020033 is charged 5.99% but base 4.00% plus margin 1.49% is 5.49%.",
+      "remediation_note": "Refer to pricing to correct the rate and refund.",
+      "cited_evidence": [],
+      "minutes_spent": 30
+    },
+    {
+      "note_id": "pair_02-MN04",
+      "loan_id": "MC-2020045",
+      "category": "INVESTOR_BALANCE_BREAK",
+      "rationale": "Investor report shows balance 327,923.31 for MC-2020045 vs servicing 326,673.31.",
+      "remediation_note": "Ask investor reporting to restate the line.",
+      "cited_evidence": [
+        "servicing:46"
+      ],
+      "minutes_spent": 40
+    },
+    {
+      "note_id": "pair_02-MN05",
+      "loan_id": "MC-2020046",
+      "category": "PARTIAL_OR_OVERPAYMENT",
+      "rationale": "MC-2020046 paid 692.47 against 1154.12 scheduled, short by 461.65.",
+      "remediation_note": "Contact the borrower about the shortfall.",
+      "cited_evidence": [
+        "servicing:47"
+      ],
+      "minutes_spent": 28
+    },
+    {
+      "note_id": "pair_02-MN06",
+      "loan_id": "MC-2020004",
+      "category": "PARTIAL_OR_OVERPAYMENT",
+      "rationale": "MC-2020004 paid in two parts (408.44 and 272.29); possibly a partial payment.",
+      "remediation_note": "Check with the borrower.",
+      "cited_evidence": [
+        "servicing:5"
+      ],
+      "minutes_spent": 36
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "generator_version": "1",
+  "pair": "pair_01",
+  "simulated": true,
+  "notes": [
+    {
+      "note_id": "pair_01-MN01",
+      "loan_id": "MC-1010007",
+      "category": "RATE_MARGIN_BREACH",
+      "rationale": "MC-1010007 is charged 6.25% but base 4.00% plus margin 1.75% is 5.75%.",
+      "remediation_note": "Refer to pricing to correct the rate and refund.",
+      "cited_evidence": [],
+      "minutes_spent": 18
+    },
+    {
+      "note_id": "pair_01-MN02",
+      "loan_id": "MC-1010008",
+      "category": "DUPLICATE_DIRECT_DEBIT",
+      "rationale": "MC-1010008 looks double debited, about \u00a31,500 each time.",
+      "remediation_note": "Refund the second collection to the borrower.",
+      "cited_evidence": [
+        "servicing:9"
+      ],
+      "minutes_spent": 23
+    },
+    {
+      "note_id": "pair_01-MN03",
+      "loan_id": "MC-1010030",
+      "category": "MISSING_PAYMENT",
+      "rationale": "No payment received for MC-1010030; 2185.85 was due on 2026-09-01.",
+      "remediation_note": "Chase the borrower and check the DD mandate.",
+      "cited_evidence": [
+        "servicing:31"
+      ],
+      "minutes_spent": 30
+    },
+    {
+      "note_id": "pair_01-MN04",
+      "loan_id": "MC-1010002",
+      "category": "PARTIAL_OR_OVERPAYMENT",
+      "rationale": "MC-1010002 paid in two parts (819.10 and 546.06); possibly a partial payment.",
+      "remediation_note": "Check with the borrower.",
+      "cited_evidence": [
+        "servicing:3"
+      ],
+      "minutes_spent": 16
+    }
+  ]
+}

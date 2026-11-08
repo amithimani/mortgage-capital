@@ -3,6 +3,8 @@
 mc-recon generate [--out data/synthetic]
 mc-recon profile  data/synthetic/pair_01
 mc-recon reconcile data/synthetic/pair_01 [--mapping path.json] [--check]
+mc-recon baseline data/synthetic/pair_0*   # Week 1 baseline summary
+mc-recon serve                             # HTTP API (PORT / MC_* env vars)
 """
 
 from __future__ import annotations
@@ -66,9 +68,18 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--mapping", type=Path, help="ColumnMapping JSON (default: expected_mapping)")
     r.add_argument("--check", action="store_true", help="compare against seeded_errors.json")
 
+    b = sub.add_parser("baseline", help="Week 1 baseline: manual notes through the same checks")
+    b.add_argument("pairs", type=Path, nargs="+")
+
     sub.add_parser("serve", help="run the agent HTTP API (configured by environment variables)")
 
     args = parser.parse_args(argv)
+    if args.cmd == "baseline":
+        from .baseline import run_baseline
+        from .policy import FakePolicyGate
+
+        print(json.dumps(run_baseline(args.pairs, FakePolicyGate())["summary"], indent=2))
+        return 0
     if args.cmd == "serve":
         from .server import serve
 

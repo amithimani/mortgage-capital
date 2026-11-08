@@ -23,6 +23,8 @@ from .provider import (
     LLMResult,
     LLMTask,
     T,
+    TokenUsage,
+    canonical_json,
 )
 
 
@@ -98,7 +100,27 @@ class RecordedFakeProvider:
                 f"recording {request.cache_key[:16]}… does not match {output_schema.__name__}: "
                 f"{exc}"
             ) from exc
-        return LLMResult(output=output, model_id=self.model_id, cache_key=request.cache_key)
+        return LLMResult(
+            output=output,
+            model_id=self.model_id,
+            cache_key=request.cache_key,
+            usage=_estimate_usage(request, rec.output),
+        )
+
+
+def _estimate_usage(request: LLMRequest, output: dict[str, Any]) -> TokenUsage:
+    """~4 characters per token over the rendered prompt and the recorded output."""
+    from .prompts import render_messages
+
+    try:
+        prompt_chars = sum(len(m["content"]) for m in render_messages(request))
+    except KeyError:  # ad-hoc prompt version without a template (tests)
+        prompt_chars = len(canonical_json(request.payload))
+    return TokenUsage(
+        input_tokens=max(1, prompt_chars // 4),
+        output_tokens=max(1, len(canonical_json(output)) // 4),
+        estimated=True,
+    )
 
 
 class RecordingProvider:

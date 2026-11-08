@@ -61,6 +61,26 @@ CREATE TABLE IF NOT EXISTS idempotency (
     response      TEXT NOT NULL,
     at            TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS spans (
+    span_id      TEXT PRIMARY KEY,
+    run_id       TEXT NOT NULL,
+    parent_id    TEXT,
+    name         TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    duration_ms  REAL,
+    status       TEXT NOT NULL,
+    attributes   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spans_run ON spans(run_id, started_at);
+CREATE TABLE IF NOT EXISTS baselines (
+    baseline_id  TEXT PRIMARY KEY,
+    label        TEXT NOT NULL,
+    created_by   TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    summary      TEXT NOT NULL,
+    results      TEXT NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
     BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -153,6 +173,63 @@ class RunStore:
         out = dict(row)
         out["manifest"] = json.loads(out["manifest"])
         return out
+
+    def list_runs(self, limit: int = 1000) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [{**dict(r), "manifest": json.loads(r["manifest"])} for r in rows]
+
+    # --- spans -----------------------------------------------------------------------------
+
+    def record_span(self, span: Any) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO spans VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    span.span_id,
+                    span.run_id,
+                    span.parent_id,
+                    span.name,
+                    span.kind,
+                    span.started_at,
+                    span.duration_ms,
+                    span.status,
+                    _dumps(span.attributes),
+                ),
+            )
+
+    def spans(self, run_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM spans WHERE run_id=? ORDER BY started_at, rowid", (run_id,)
+            ).fetchall()
+        return [{**dict(r), "attributes": json.loads(r["attributes"])} for r in rows]
+
+    # --- baselines -------------------------------------------------------------------------
+
+    def save_baseline(
+        self, baseline_id: str, label: str, created_by: str, summary: dict, results: list
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO baselines VALUES (?,?,?,?,?,?)",
+                (baseline_id, label, created_by, self._clock(), _dumps(summary), _dumps(results)),
+            )
+
+    def latest_baseline(self) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM baselines ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            **dict(row),
+            "summary": json.loads(row["summary"]),
+            "results": json.loads(row["results"]),
+        }
 
     # --- events (append-only) --------------------------------------------------------------
 

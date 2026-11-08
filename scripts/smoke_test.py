@@ -88,6 +88,13 @@ def main() -> int:
         and events[0]["actor"] == "smoke-test",
         "oversight event recorded with analyst identity",
     )
+    status, m = call(base, "GET", f"/runs/{rid}/metrics")
+    check(
+        status == 200 and m["llm"]["calls"] > 0 and m["policy"]["exceptions_evaluated"] > 0,
+        f"metrics: {m['llm']['calls']} LLM calls, first-pass {m['policy']['first_pass']}",
+    )
+    status, log_entry = 200, log[0]
+    check(bool(log_entry.get("owner") and log_entry.get("priority")), "log has owner + priority")
     print(f"OK run {rid}: status={run['status']} counts={run['exception_counts']}")
     return 0
 

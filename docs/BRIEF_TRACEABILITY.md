@@ -24,26 +24,25 @@ Status key: ✅ done · 🟡 partial / on fakes · ⛔ blocked on access · ❌ 
 | 3d | Reconcile, match, net, compare in deterministic code, not the LLM | ✅ | `engine/reconcile.py`, `Decimal`-exact; golden tests show zero misses and zero false positives |
 | 3e | Classify into a fixed exception set: missing payment, duplicate DD, rate vs contractual margin breach | ✅ | `ExceptionCategory` + per-kind `constrain_category` guard. Superset: also partial payment, balance break, unidentified payment |
 | 3f | Plain-English rationale + remediation note per exception | 🟡 | `draft_rationale` node, grounded in evidence rows only. Oracle text on the fake |
-| 3g | Remediation log with **owner, priority**, evidence and audit trail | 🟡 | Evidence + audit trail ✅ (append-only log, `/events`). **Gap G1: no `owner` / `priority` fields** |
-| 4 | `DisseqtAgenticClient(project_id, service_name, application_id)`; spans: `AGENT_EXEC` orchestration, `MODEL_EXEC` per LLM call (model, tokens, input/output messages), `TOOL_EXEC` for parse / engine / writer | 🟡 / ⛔ | `Tracer` seam with matching span kinds; `MODEL_EXEC` and `TOOL_EXEC` emitted. **Gap G2: no run-level `AGENT_EXEC` span, no input/output messages on `MODEL_EXEC`, no span timing.** Disseqt client needs access |
+| 3g | Remediation log with **owner, priority**, evidence and audit trail | ✅ | `remediation.py`: deterministic owner routing, priority P1–P3 with SLA, amount at risk and the reason for the priority; append-only log; `/events` (G1 closed) |
+| 4 | `DisseqtAgenticClient(project_id, service_name, application_id)`; spans: `AGENT_EXEC` orchestration, `MODEL_EXEC` per LLM call (model, tokens, input/output messages), `TOOL_EXEC` for parse / engine / writer | ✅ locally / ⛔ Disseqt | `observability.py`: `AGENT_EXEC` per graph invocation with nested, timed child spans; `MODEL_EXEC` carries model, tokens, rendered input messages (`llm/prompts.py`) and output; `TOOL_EXEC` for parse, engine, policy and writer. Spans are persisted; a Disseqt exporter plugs in once there is access (G2 closed) |
 | 5a | Faithfulness + context-relevance per drafted exception | 🟡 | `FakePolicyGate` stand-ins (number grounding, citation scope) |
-| 5b | Answer-relevance | ❌ | **Gap G3** |
-| 5c | Tool-call-accuracy + plan-coherence (engine called correctly and in order) | ❌ | **Gap G3.** These score the run's trajectory, so they need the ordered tool-call list from the trace (plan C5) |
-| 5d | Prompt-injection **and PII** checks on ingested files | 🟡 | Injection screen ✅ (flagged samples withheld, header injection stops the run). **Gap G4: no PII screen** |
+| 5b | Answer-relevance | ✅ on fake | Names this loan and addresses this category (G3 closed) |
+| 5c | Tool-call-accuracy + plan-coherence (engine called correctly and in order) | ✅ on fake | Each step appends to the run `trajectory`. The gate checks the engine ran once on the confirmed mapping and ingested files, every finding was classified and drafted, and the step order. Merged into every exception's verdict; `GET /runs/{id}/trajectory` (G3 closed) |
+| 5d | Prompt-injection **and PII** checks on ingested files | ✅ on fake | Injection + PII (e-mail, UK phone, NI number, sort code, IBAN) screens on everything that reaches a prompt. Flagged samples are withheld and logged with the failed rule (G4 closed) |
 | 6 | Realtime policy bundling validators with thresholds → one PASS/BLOCK; BLOCK holds for human review | ✅ on fake / ⛔ real | `PolicyGate`, fail-closed, review queue with approve / edit (re-checked) / reject. The real policy is authored in the Disseqt dashboard |
-| 7 | Week 1 baseline: run samples of the current manual process through the same checks | ❌ | **Gap G5** |
-| 8 | Dashboard analytics: trace timeline, per-validator scores, PASS/BLOCK rates, tokens and cost per run, latency per step, drift vs baseline | ⛔ | Disseqt dashboard. **Gap G6:** no local equivalent yet; per-validator scores are already stored per verdict |
+| 7 | Week 1 baseline: run samples of the current manual process through the same checks | ✅ simulated | `baseline.py`: manual-process notes go through the **same gate** with the same grounding; results stored (`POST /baselines`, `mc-recon baseline`). Notes are simulated until real anonymised ones are provided (same schema) (G5 closed) |
+| 8 | Dashboard analytics: trace timeline, per-validator scores, PASS/BLOCK rates, tokens and cost per run, latency per step, drift vs baseline | ✅ locally / ⛔ Disseqt | `metrics.py`: `GET /runs/{id}/metrics` and `GET /metrics` cover all of them, plus human wait time. The Disseqt dashboard needs access (G6 closed) |
 
-## Gaps to close (no Disseqt access needed)
+## Gaps closed (no Disseqt access needed)
 
-| Gap | Work |
-|---|---|
-| G1 | Add `owner` (routing rule per category, e.g. collections, payments ops, pricing) and `priority` (deterministic, from category + amount at risk) to exceptions and the remediation log |
-| G2 | Run-level `AGENT_EXEC` span wrapping each graph invocation; message capture on `MODEL_EXEC`; start/end timing on all spans |
-| G3 | Fake `answer_relevance` per exception; fake `tool_call_accuracy` / `plan_coherence` over the run trajectory (expected node order, engine called once with the confirmed mapping) |
-| G4 | PII screen on ingested text (emails, phone numbers, UK sort code / account / NI-number patterns), alongside the injection screen |
-| G5 | Baseline harness: take analyst-written exception notes from the "manual process", run them through the same gate, store the scores as the baseline |
-| G6 | `GET /runs/{id}/metrics` and a summary across runs: PASS/BLOCK rate, per-validator scores, latency per step, tokens/cost, delta vs baseline. It stands in for the dashboard until access exists and stays useful afterwards |
+All six gaps (G1–G6) found when the brief was first reviewed are now closed on the fakes. On the
+three synthetic datasets, the simulated manual process passes the checks on 35% of its notes. It
+uses rounded figures, misses citations, and raises false positives. The agent passes 100% on
+its first attempt, and `vs_baseline` in `/metrics` reports the difference.
+
+What remains needs access: a real LLM provider (step 3), and Disseqt registration, tracing
+export, published policies and the dashboard (steps 2, 4, 6, 8).
 
 ## Access to request
 

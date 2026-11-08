@@ -67,6 +67,8 @@ class TokenUsage(BaseModel):
 
     input_tokens: int = 0
     output_tokens: int = 0
+    estimated: bool = False
+    """True when counts are a chars/4 estimate (the fake), not provider-reported."""
 
 
 @dataclass(frozen=True)

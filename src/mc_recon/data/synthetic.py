@@ -496,6 +496,134 @@ def build_pair(spec: PairSpec) -> dict[str, str | bytes]:
                 "noise": catalog.noise,
             }
         ),
+        "manual_process_notes.json": _json(
+            _manual_notes(spec, loans, payments, error_loan, noise_loan, catalog)
+        ),
+    }
+
+
+def _manual_notes(
+    spec: PairSpec,
+    loans: list[_Loan],
+    payments: list[_Payment],
+    error_loan: dict[str, _Loan],
+    noise_loan: dict[str, _Loan],
+    catalog: _Catalog,
+) -> dict:
+    """Simulated output of the *current manual process* for the Week 1 baseline.
+
+    Mimics what hand-written exception notes look like: some seeded errors are missed, some
+    figures are rounded ("about £1,400"), some notes cite no source row, and one benign item
+    (a split payment) is flagged by mistake. Separate RNG, so the input files are unaffected.
+    Replace with real anonymised analyst notes (same schema) when available.
+    """
+    rng = random.Random(spec.seed * 1009 + 17)
+    srow = {loan.loan_id: i for i, loan in enumerate(loans, start=1)}
+
+    def prow(ref: str) -> list[int]:
+        return [i for i, p in enumerate(payments, start=1) if p.loan_ref.strip().upper() == ref]
+
+    def approx(v: Decimal) -> str:
+        return f"{round(v, -2):,.0f}"
+
+    notes = []
+    for err in catalog.errors:
+        etype = err["type"]
+        detected = rng.random() >= 0.15
+        rounded = rng.random() < 0.35
+        cites = rng.random() >= 0.25
+        minutes = rng.randint(8, 40)
+        if not detected:
+            continue
+        if etype == "unidentified_payment":
+            p = next(p for p in payments if p.tag == "unidentified")
+            ref, row = p.loan_ref, f"payments:{payments.index(p) + 1}"
+            text = (
+                f"About £{approx(p.amount)} received against {ref}, which is not on our book."
+                if rounded
+                else f"Payment {p.txn_id} of {p.amount} received against {ref}, not on our book."
+            )
+            remedy = "Move to suspense and trace the payer with the bank."
+            notes.append((ref, "UNIDENTIFIED_PAYMENT", text, remedy, [row], minutes, cites))
+            continue
+        loan = error_loan[etype]
+        lid, row = loan.loan_id, f"servicing:{srow[loan.loan_id]}"
+        pays = [payments[i - 1] for i in prow(lid)]
+        if etype == "missing_payment":
+            cat, remedy = "MISSING_PAYMENT", "Chase the borrower and check the DD mandate."
+            text = (
+                f"No payment from {lid} this month, roughly £{approx(loan.scheduled)} outstanding."
+                if rounded
+                else f"No payment received for {lid}; {loan.scheduled} was due on "
+                f"{loan.due_date.isoformat()}."
+            )
+        elif etype == "duplicate_direct_debit":
+            cat, remedy = "DUPLICATE_DIRECT_DEBIT", "Refund the second collection to the borrower."
+            text = (
+                f"{lid} looks double debited, about £{approx(pays[0].amount)} each time."
+                if rounded
+                else f"{lid} was debited twice on mandate {loan.mandate_ref}: {pays[0].amount} on "
+                f"{pays[0].value_date.isoformat()} and again on {pays[-1].value_date.isoformat()}."
+            )
+        elif etype == "rate_margin_breach":
+            cat, remedy = "RATE_MARGIN_BREACH", "Refer to pricing to correct the rate and refund."
+            contract = loan.base_rate + loan.margin
+            text = (
+                f"Rate on {lid} looks about 0.5% too high."
+                if rounded
+                else f"{lid} is charged {loan.applied_rate}% but base {loan.base_rate}% plus "
+                f"margin {loan.margin}% is {contract}%."
+            )
+        elif etype == "partial_payment":
+            cat, remedy = "PARTIAL_OR_OVERPAYMENT", "Contact the borrower about the shortfall."
+            paid = pays[0].amount
+            text = (
+                f"{lid} underpaid by around £{approx(loan.scheduled - paid)}."
+                if rounded
+                else f"{lid} paid {paid} against {loan.scheduled} scheduled, short by "
+                f"{loan.scheduled - paid}."
+            )
+        else:  # investor_balance_break
+            cat, remedy = "INVESTOR_BALANCE_BREAK", "Ask investor reporting to restate the line."
+            text = (
+                f"Investor balance for {lid} is out by about £1.3k."
+                if rounded
+                else f"Investor report shows balance {loan.inv_closing:,.2f} for {lid} vs "
+                f"servicing {loan.closing:,.2f}."
+            )
+        notes.append((lid, cat, text, remedy, [row], minutes, cites))
+
+    if "split_payment" in noise_loan:  # a benign item flagged by mistake
+        loan = noise_loan["split_payment"]
+        a, b = (p.amount for p in payments if p.loan_ref.strip().upper() == loan.loan_id)
+        notes.append(
+            (
+                loan.loan_id,
+                "PARTIAL_OR_OVERPAYMENT",
+                f"{loan.loan_id} paid in two parts ({a} and {b}); possibly a partial payment.",
+                "Check with the borrower.",
+                [f"servicing:{srow[loan.loan_id]}"],
+                rng.randint(8, 40),
+                True,
+            )
+        )
+
+    return {
+        "generator_version": GENERATOR_VERSION,
+        "pair": spec.name,
+        "simulated": True,
+        "notes": [
+            {
+                "note_id": f"{spec.name}-MN{n:02d}",
+                "loan_id": lid,
+                "category": cat,
+                "rationale": text,
+                "remediation_note": remedy,
+                "cited_evidence": rows if cites else [],
+                "minutes_spent": minutes,
+            }
+            for n, (lid, cat, text, remedy, rows, minutes, cites) in enumerate(notes, start=1)
+        ],
     }
 
 
