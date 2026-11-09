@@ -34,7 +34,7 @@ def test_seeded_txn_ids_are_in_evidence(pair_dir):
 
 
 def test_required_error_types_are_covered():
-    """Plan §8: at least one missing payment, duplicate DD and rate-vs-margin breach."""
+    """At least one missing payment, duplicate DD and rate-vs-margin breach."""
     from conftest import SYNTHETIC_DIR
 
     types = {e["type"] for p in SYNTHETIC_DIR.glob("pair_*") for e in load_catalog(p)["errors"]}

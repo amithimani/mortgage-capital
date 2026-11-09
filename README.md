@@ -270,7 +270,7 @@ src/mc_recon/
   config.py, server.py, cli.py
 data/synthetic/    Three seeded datasets with expected results
 tests/             Unit, flow, API, deployment and harness tests
-docs/              Traceability, harness, deployment and implementation plan
+docs/              Harness, deployment and API contract
 deploy/kubernetes/ Portable manifest
 requirements/      Hash-pinned lock files (`make lock` to refresh)
 scripts/           Black-box smoke test
@@ -303,8 +303,6 @@ payload fails loudly with a missing recording instead of replaying a stale answe
 
 | Document | Covers |
 |---|---|
-| [docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md) | Every requirement in the brief mapped to code, plus open gaps and access needed |
 | [docs/HARNESS.md](docs/HARNESS.md) | Limits, memory, input screening, mocks and evaluation |
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Full design, timeline, and the verified surface of `disseqt-ai-sdk==0.11.2` |
 | [docs/openapi.json](docs/openapi.json) | The API contract, generated from the code |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Container image, per-cloud notes, secrets and scaling |

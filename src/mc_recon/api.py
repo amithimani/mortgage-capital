@@ -1,4 +1,4 @@
-"""FastAPI surface (plan §4). Thin: auth header, idempotency, error mapping, then RunService.
+"""FastAPI surface. Thin: auth header, idempotency, error mapping, then RunService.
 
 With ``MC_ANALYST_TOKENS`` set, every route except the probes needs a token, the API docs
 included, and the analyst identity comes from it. Without it (local PoC mode) identity is the
