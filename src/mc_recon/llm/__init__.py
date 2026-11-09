@@ -19,6 +19,7 @@ from .provider import (
     LLMRequest,
     LLMResult,
     LLMTask,
+    LLMUnavailable,
     TokenUsage,
 )
 from .schemas import ClassificationOutput, MappingProposal, RationaleOutput
@@ -32,6 +33,7 @@ __all__ = [
     "LLMRequest",
     "LLMResult",
     "LLMTask",
+    "LLMUnavailable",
     "MappingProposal",
     "MissingRecordingError",
     "RationaleOutput",

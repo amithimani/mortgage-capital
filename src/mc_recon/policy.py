@@ -24,6 +24,7 @@ BLOCK: an outage never lets output through unvalidated.
 from __future__ import annotations
 
 import re
+from collections import deque
 from collections.abc import Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
@@ -33,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .engine.taxonomy import ExceptionCategory as C
 
 Decision = Literal["PASS", "BLOCK"]
+CALL_HISTORY = 2000
 
 EXPECTED_PLAN = (
     "ingest",
@@ -229,8 +231,9 @@ class FakePolicyGate:
     def __init__(self, force_block: set[str] | None = None):
         self.force_block = set(force_block or ())
         """Exception ids to BLOCK unconditionally (for tests of the review loop)."""
-        self.calls: list[PolicySubject] = []
-        self.run_calls: list[list[dict]] = []
+        self.calls: deque[PolicySubject] = deque(maxlen=CALL_HISTORY)
+        self.run_calls: deque[list[dict]] = deque(maxlen=CALL_HISTORY)
+        """Recent calls, for tests. Bounded because the service also runs on this fake."""
 
     def _verdict(self, rules: list[RuleResult]) -> PolicyVerdict:
         return PolicyVerdict(

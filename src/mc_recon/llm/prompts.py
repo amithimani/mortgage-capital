@@ -47,10 +47,18 @@ def render_messages(request: LLMRequest) -> list[dict[str, str]]:
         system = SYSTEM_PROMPTS[request.prompt_version]
     except KeyError:
         raise KeyError(f"no template for prompt_version {request.prompt_version!r}") from None
-    return [
+    messages = [
         {"role": "system", "content": system},
         {
             "role": "user",
             "content": f"{_TASK_INSTRUCTION[request.task]}\n\n{canonical_json(request.payload)}",
         },
     ]
+    if request.feedback:
+        messages.append(
+            {
+                "role": "user",
+                "content": f"Your previous answer was rejected: {request.feedback}\nTry again.",
+            }
+        )
+    return messages

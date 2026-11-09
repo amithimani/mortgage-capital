@@ -5,6 +5,8 @@ mc-recon profile  data/synthetic/pair_01
 mc-recon reconcile data/synthetic/pair_01 [--mapping path.json] [--check]
 mc-recon baseline data/synthetic/pair_0*   # Week 1 baseline summary
 mc-recon serve                             # HTTP API (PORT / MC_* env vars)
+mc-recon eval [--json]                     # every harness scenario, as a scorecard
+mc-recon mock [--port 8100]                # mock Disseqt + LLM endpoints
 """
 
 from __future__ import annotations
@@ -73,7 +75,30 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("serve", help="run the agent HTTP API (configured by environment variables)")
 
+    e = sub.add_parser("eval", help="run every harness scenario and print a scorecard")
+    e.add_argument("--data-root", type=Path, default=Path("data/synthetic"))
+    e.add_argument("--json", action="store_true")
+
+    m = sub.add_parser("mock", help="serve the mock Disseqt and LLM endpoints")
+    m.add_argument("--data-root", type=Path, default=Path("data/synthetic"))
+    m.add_argument("--host", default="0.0.0.0")
+    m.add_argument("--port", type=int, default=8100)
+    m.add_argument("--api-key", default="mock-key")
+
     args = parser.parse_args(argv)
+    if args.cmd == "eval":
+        from .evaluation import main as evaluate
+
+        return evaluate(args.data_root, args.json)
+    if args.cmd == "mock":
+        import uvicorn
+
+        from .evaluation import Env
+        from .mocks import create_mock_app
+
+        app = create_mock_app(Env(args.data_root).recordings, api_key=args.api_key)
+        uvicorn.run(app, host=args.host, port=args.port)
+        return 0
     if args.cmd == "baseline":
         from .baseline import run_baseline
         from .policy import FakePolicyGate

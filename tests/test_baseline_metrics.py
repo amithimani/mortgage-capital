@@ -62,7 +62,7 @@ def test_trajectory_recorded_through_review_loop():
     for exc_id in svc.get_run(rid)["pending_action"]["pending"]:
         from mc_recon.service import ReviewDecision
 
-        svc.review_exception(rid, exc_id, "bob", ReviewDecision(action="approve"))
+        svc.review_exception(rid, exc_id, "bob", ReviewDecision(action="approve", note="ok"))
     steps = [t["step"] for t in svc.trajectory(rid)]
     assert steps[len(EXPECTED_PLAN) :] == ["validate_policy", "human_review_queue"]
 

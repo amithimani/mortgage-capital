@@ -12,9 +12,13 @@ import json
 import sqlite3
 import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+IN_PROGRESS = 0
+"""``idempotency.status_code`` while the first request with that key is still running."""
+IDEMPOTENCY_CLAIM_TTL = timedelta(minutes=15)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -81,6 +85,26 @@ CREATE TABLE IF NOT EXISTS baselines (
     summary      TEXT NOT NULL,
     results      TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mapping_memory (
+    fingerprint   TEXT PRIMARY KEY,
+    mapping       TEXT NOT NULL,
+    confirmed_by  TEXT NOT NULL,
+    source_run    TEXT NOT NULL,
+    confirmed_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS governance_evidence (
+    seq             INTEGER PRIMARY KEY AUTOINCREMENT,
+    evidence_id     TEXT NOT NULL UNIQUE,
+    control_id      TEXT NOT NULL,
+    run_id          TEXT NOT NULL,
+    subject_id      TEXT NOT NULL,
+    record          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_control ON governance_evidence(control_id, seq);
+CREATE TRIGGER IF NOT EXISTS evidence_no_update BEFORE UPDATE ON governance_evidence
+    BEGIN SELECT RAISE(ABORT, 'governance evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS evidence_no_delete BEFORE DELETE ON governance_evidence
+    BEGIN SELECT RAISE(ABORT, 'governance evidence is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
     BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
@@ -335,9 +359,101 @@ class RunStore:
             "response": json.loads(row["response"]),
         }
 
-    def put_idempotent(self, key: str, request_hash: str, status_code: int, response: Any) -> None:
+    def reserve_idempotent(self, key: str, request_hash: str) -> bool:
+        """Claim a key before doing the work. False means another request already holds it.
+
+        An unfinished claim older than ``IDEMPOTENCY_CLAIM_TTL`` belongs to a crashed request,
+        so it is reclaimed rather than blocking that key forever.
+        """
+        now = self._clock()
+        cutoff = (datetime.fromisoformat(now) - IDEMPOTENCY_CLAIM_TTL).isoformat(
+            timespec="milliseconds"
+        )
         with self._lock:
             self._conn.execute(
-                "INSERT OR IGNORE INTO idempotency VALUES (?,?,?,?,?)",
-                (key, request_hash, status_code, _dumps(response), self._clock()),
+                "DELETE FROM idempotency WHERE key=? AND status_code=? AND at<?",
+                (key, IN_PROGRESS, cutoff),
             )
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO idempotency VALUES (?,?,?,?,?)",
+                (key, request_hash, IN_PROGRESS, "null", now),
+            )
+            return cur.rowcount == 1
+
+    def complete_idempotent(self, key: str, status_code: int, response: Any) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE idempotency SET status_code=?, response=? WHERE key=?",
+                (status_code, _dumps(response), key),
+            )
+
+    def release_idempotent(self, key: str) -> None:
+        """The work failed: free the key so a retry can run."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM idempotency WHERE key=? AND status_code=?", (key, IN_PROGRESS)
+            )
+
+    # --- long-term memory: analyst-confirmed mappings ----------------------------------------
+
+    def remember_mapping(
+        self, fingerprint: str, mapping: dict, confirmed_by: str, source_run: str
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO mapping_memory VALUES (?,?,?,?,?)",
+                (fingerprint, _dumps(mapping), confirmed_by, source_run, self._clock()),
+            )
+
+    def recall_mapping(self, fingerprint: str, max_age_days: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM mapping_memory WHERE fingerprint=?", (fingerprint,)
+            ).fetchone()
+        if row is None:
+            return None
+        age = datetime.fromisoformat(self._clock()) - datetime.fromisoformat(row["confirmed_at"])
+        if age > timedelta(days=max_age_days):
+            return None
+        return {**dict(row), "mapping": json.loads(row["mapping"])}
+
+    def list_mappings(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM mapping_memory ORDER BY confirmed_at DESC"
+            ).fetchall()
+        return [{**dict(r), "mapping": json.loads(r["mapping"])} for r in rows]
+
+    def forget_mapping(self, fingerprint: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM mapping_memory WHERE fingerprint=?", (fingerprint,)
+            )
+            return cur.rowcount == 1
+
+    # --- governance evidence (append-only) ---------------------------------------------------
+
+    def append_evidence(self, record: dict) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO governance_evidence "
+                "(evidence_id, control_id, run_id, subject_id, record) VALUES (?,?,?,?,?)",
+                (
+                    record["evidence_id"],
+                    record["control_id"],
+                    record["run_id"],
+                    record["subject_id"],
+                    _dumps(record),
+                ),
+            )
+            return cur.rowcount == 1
+
+    def evidence(self, control_id: str | None = None, run_id: str | None = None) -> list[dict]:
+        sql, args = "SELECT record FROM governance_evidence WHERE 1=1", ()
+        if control_id:
+            sql, args = sql + " AND control_id=?", (*args, control_id)
+        if run_id:
+            sql, args = sql + " AND run_id=?", (*args, run_id)
+        with self._lock:
+            rows = self._conn.execute(sql + " ORDER BY seq", args).fetchall()
+        return [json.loads(r["record"]) for r in rows]

@@ -52,7 +52,12 @@ def test_fake_provider_needs_recordings(tmp_path):
 def test_build_service_from_settings_runs_end_to_end(tmp_path):
     svc = build_service(Settings(data_root=SYNTHETIC_DIR, db_path=str(tmp_path / "db.sqlite")))
     client = TestClient(create_app(svc))
-    assert client.get("/readyz").json() == {"ready": True, "store": True, "llm": True}
+    assert client.get("/readyz").json() == {
+        "ready": True,
+        "store": True,
+        "llm": True,
+        "gate": True,
+    }
     rid = client.post("/runs", json={"dataset": "pair_01"}, headers={"X-Analyst-Id": "a"}).json()[
         "run_id"
     ]

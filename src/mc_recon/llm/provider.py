@@ -49,6 +49,8 @@ class LLMRequest(BaseModel):
     prompt_version: str
     payload: dict[str, Any]
     temperature: float = 0.0
+    feedback: str | None = None
+    """Why the previous attempt was rejected. A re-ask aid, so not part of ``cache_key``."""
 
     @property
     def cache_key(self) -> str:
@@ -88,6 +90,10 @@ class LLMProvider(Protocol):
 
 class LLMError(RuntimeError):
     pass
+
+
+class LLMUnavailable(LLMError):
+    """The provider could not be reached or kept failing after retries."""
 
 
 class LLMOutputValidationError(LLMError):

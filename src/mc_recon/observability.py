@@ -68,6 +68,8 @@ class StoreExporter:
 class Tracer:
     def __init__(self, exporters: list[SpanExporter] | None = None) -> None:
         self.exporters: list[SpanExporter] = list(exporters or [])
+        self.default_attributes: dict[str, Any] = {}
+        """Stamped on every span, e.g. ``application_id`` for attribution."""
 
     def add_exporter(self, exporter: SpanExporter) -> None:
         self.exporters.append(exporter)
@@ -79,7 +81,7 @@ class Tracer:
             run_id=run_id,
             name=name,
             kind=kind,
-            attributes=dict(attributes),
+            attributes={**self.default_attributes, **attributes},
             parent_id=parent.span_id if parent and parent.run_id == run_id else None,
             started_at=datetime.now(UTC).isoformat(timespec="milliseconds"),
         )

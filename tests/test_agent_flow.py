@@ -136,8 +136,8 @@ def test_review_validation_and_conflicts():
     with pytest.raises(ValueError):
         ReviewDecision(action="edit")
     with pytest.raises(Conflict, match="not pending"):
-        svc.review_exception(rid, "D-nope", "bob", ReviewDecision(action="approve"))
-    svc.review_exception(rid, exc_id, "bob", ReviewDecision(action="approve"))
+        svc.review_exception(rid, "D-nope", "bob", ReviewDecision(action="approve", note="ok"))
+    svc.review_exception(rid, exc_id, "bob", ReviewDecision(action="approve", note="ok"))
     with pytest.raises(Conflict, match="different decision"):
         svc.review_exception(rid, exc_id, "bob", ReviewDecision(action="reject"))
     with pytest.raises(Conflict, match="not awaiting mapping"):

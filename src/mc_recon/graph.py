@@ -38,6 +38,7 @@ from .engine import (
     ColumnMapping,
     Discrepancy,
     EngineInputError,
+    ExceptionCategory,
     FileProfile,
     ReconConfig,
     Source,
@@ -46,12 +47,16 @@ from .engine import (
     profile_csv,
     reconcile,
 )
+from .engine.loader import read_csv
+from .governance import GovernanceLayer
+from .limits import AgentLimits, LimitExceeded, RunBudget, estimate_tokens
 from .llm import (
     PROMPT_VERSIONS,
     ClassificationOutput,
     LLMOutputValidationError,
     LLMProvider,
     LLMRequest,
+    LLMUnavailable,
     MappingProposal,
     RationaleOutput,
     classification_request,
@@ -60,10 +65,13 @@ from .llm import (
 )
 from .llm.prompts import render_messages
 from .llm.provider import T, canonical_json
+from .memory import header_fingerprint, recalled_mapping_fits
 from .observability import NullTracer, Tracer
 from .policy import (
     PolicyGate,
     PolicySubject,
+    PolicyVerdict,
+    RuleResult,
     combine,
     evaluate_fail_closed,
     evaluate_run_fail_closed,
@@ -73,6 +81,9 @@ from .remediation import assign
 from .store import RunStore
 
 SYSTEM_ACTOR = "agent"
+DEGRADABLE = (LimitExceeded, LLMUnavailable, LLMOutputValidationError)
+"""Per-finding LLM failures that hold the finding for a human instead of failing the run."""
+_PROMPT_TEXT_FIELDS = ("mandate_ref", "channel", "loan_id")
 WITHHELD = "[withheld by input screen]"
 
 # exception lifecycle
@@ -94,6 +105,8 @@ class RunState(TypedDict, total=False):
     file_hashes: dict[str, str]
     profiles: list[dict]
     input_screen: list[dict]
+    input_screen_full: list[dict]
+    usage: dict[str, Any]
     mapping_proposal: dict
     mapping_problems: list[str]
     mapping: dict
@@ -113,7 +126,11 @@ class AgentDeps:
     store: RunStore
     tracer: Tracer = field(default_factory=NullTracer)
     recon_config: ReconConfig = field(default_factory=ReconConfig)
-    max_reasks: int = 1
+    limits: AgentLimits = field(default_factory=AgentLimits)
+    mapping_memory_days: int = 0
+    """Days a confirmed mapping can be recalled for. ``0`` turns long-term memory off."""
+    governance: GovernanceLayer | None = None
+    """Use Case 2 controls. ``None`` runs Use Case 1 alone."""
 
 
 # --- helpers ------------------------------------------------------------------------------
@@ -170,12 +187,16 @@ def _discrepancy(exc: dict) -> Discrepancy:
 
 def build_graph(deps: AgentDeps) -> StateGraph:
     store, tracer, llm, gate = deps.store, deps.tracer, deps.llm, deps.gate
+    limits, governance = deps.limits, deps.governance
 
-    def call_llm(run_id: str, node: str, request: LLMRequest, schema: type[T]) -> T:
-        """One structured call with a bounded re-ask on schema-invalid output."""
-        attempts = deps.max_reasks + 1
-        messages = render_messages(request)
+    def call_llm(
+        run_id: str, node: str, request: LLMRequest, schema: type[T], budget: RunBudget
+    ) -> T:
+        """One structured call: admitted by the budget, with a bounded re-ask on invalid output."""
+        attempts = limits.max_reasks + 1
         for attempt in range(1, attempts + 1):
+            messages = render_messages(request)
+            budget.admit(estimate_tokens(messages))
             with tracer.span(
                 run_id,
                 node,
@@ -191,10 +212,17 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 try:
                     result = llm.generate(request, schema)
                 except LLMOutputValidationError as exc:
+                    budget.charge_failure()
                     span.set(outcome="invalid_output", error=str(exc)[:500])
                     if attempt == attempts:
                         raise
+                    request = request.model_copy(update={"feedback": str(exc)[:500]})
                     continue
+                except LLMUnavailable as exc:
+                    budget.charge_failure()
+                    span.set(outcome="unavailable", error=str(exc)[:500])
+                    raise
+                budget.charge(result.usage, result.model_id)
                 span.set(
                     outcome="ok",
                     model_id=result.model_id,
@@ -206,19 +234,61 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 return result.output
         raise AssertionError("unreachable")
 
+    def record_degraded(run_id: str, exc_id: str, node: str, error: Exception) -> str:
+        reason = f"{node} skipped: {error}"[:500]
+        store.record_event(
+            run_id,
+            "limit_reached" if isinstance(error, LimitExceeded) else "agent_degraded",
+            SYSTEM_ACTOR,
+            {"node": node, "error_type": type(error).__name__, "reason": reason},
+            subject_id=exc_id,
+            dedupe_key=f"{run_id}:degraded:{exc_id}:{node}",
+        )
+        return reason
+
+    def screen_prompt_text(run_id: str, raw: dict) -> str | None:
+        """Screen the file-derived text this finding would put in a prompt.
+
+        The profile samples only cover the first few values per column, and the evidence rows
+        can come from anywhere in the file. Returns why the finding must not reach the LLM.
+        """
+        values = {e["key"] for e in raw["evidence"]}
+        for e in raw["evidence"]:
+            values |= {e["fields"][f] for f in _PROMPT_TEXT_FIELDS if e["fields"].get(f)}
+        verdict = screen_fail_closed(gate, "\n".join(sorted(values)))
+        if not verdict.blocked:
+            return None
+        failed = [r.validator for r in verdict.rules if r.status == "FAIL"] or ["screen_error"]
+        store.record_event(
+            run_id,
+            "input_screen_block",
+            SYSTEM_ACTOR,
+            {"scope": "finding", "failed_rules": failed},
+            subject_id=raw["id"],
+            dedupe_key=f"{run_id}:screen:finding:{raw['id']}",
+        )
+        return f"evidence failed the input screen ({', '.join(failed)}); not sent to the LLM"
+
     # --- nodes ----------------------------------------------------------------------------
 
     def ingest(state: RunState) -> RunState:
         run_id = state["run_id"]
         with tracer.span(run_id, "ingest", "TOOL_EXEC", tool="parse_and_profile") as span:
-            profiles, findings = [], []
+            profiles, findings, full_scan = [], [], []
             for source, path in _paths(state).items():
                 profile = profile_csv(path, source).model_dump(mode="json")
+                if profile["row_count"] > limits.max_rows:
+                    raise LimitExceeded(
+                        "max_rows",
+                        f"{source}: {profile['row_count']} rows > {limits.max_rows}",
+                    )
+                _, rows = read_csv(path)
                 for col in profile["columns"]:
                     header_verdict = screen_fail_closed(gate, col["name"])
                     if header_verdict.blocked:
+                        cause = f" ({header_verdict.error})" if header_verdict.error else ""
                         raise InputScreenError(
-                            f"{source}: header {col['name']!r} failed the input screen"
+                            f"{source}: header {col['name']!r} failed the input screen{cause}"
                         )
                     verdict = screen_fail_closed(gate, "\n".join(col["samples"]))
                     if verdict.blocked:
@@ -233,7 +303,30 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                                 "verdict": verdict.model_dump(mode="json"),
                             }
                         )
+                    elif col["inferred_type"] == "string":
+                        # The brief asks for checks on the ingested *files*, not just the samples.
+                        distinct = sorted({r[col["name"]].strip() for r in rows} - {""})
+                        whole = screen_fail_closed(gate, "\n".join(distinct))
+                        if whole.blocked:
+                            full_scan.append(
+                                {
+                                    "source": source.value,
+                                    "column": col["name"],
+                                    "failed_rules": [
+                                        r.validator for r in whole.rules if r.status == "FAIL"
+                                    ],
+                                }
+                            )
                 profiles.append(profile)
+            for f in full_scan:
+                store.record_event(
+                    run_id,
+                    "input_screen_finding",
+                    SYSTEM_ACTOR,
+                    f,
+                    subject_id=f"{f['source']}.{f['column']}",
+                    dedupe_key=f"{run_id}:fullscan:{f['source']}:{f['column']}",
+                )
             hashes = {p["source"]: p["sha256"] for p in profiles}
             for f in findings:
                 store.record_event(
@@ -250,6 +343,7 @@ def build_graph(deps: AgentDeps) -> StateGraph:
             "profiles": profiles,
             "file_hashes": hashes,
             "input_screen": findings,
+            "input_screen_full": full_scan,
             "trajectory": [
                 {
                     "step": "ingest",
@@ -261,19 +355,46 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         }
 
     def propose_mapping(state: RunState) -> RunState:
-        profiles = [FileProfile.model_validate(p) for p in state["profiles"]]
-        request = mapping_request(profiles)
-        proposal = call_llm(state["run_id"], "propose_mapping", request, MappingProposal)
-        problems = proposal.mapping.problems(_headers(state))
+        run_id = state["run_id"]
+        headers = _headers(state)
+        recalled = None
+        if deps.mapping_memory_days:
+            fingerprint = header_fingerprint(headers)
+            memory = store.recall_mapping(fingerprint, deps.mapping_memory_days)
+            if memory and recalled_mapping_fits(
+                ColumnMapping.model_validate(memory["mapping"]), headers, state["profiles"]
+            ):
+                recalled = memory
+        budget = RunBudget(limits, state.get("usage"))
+        if recalled:
+            # Still goes to the analyst: memory replaces the LLM's proposal, not the human.
+            proposal = MappingProposal(
+                mapping=ColumnMapping.model_validate(recalled["mapping"]),
+                notes=f"Recalled: confirmed by {recalled['confirmed_by']}.",
+            )
+            store.record_event(
+                run_id,
+                "mapping_recalled",
+                SYSTEM_ACTOR,
+                {k: recalled[k] for k in ("fingerprint", "confirmed_by", "source_run")},
+                dedupe_key=f"{run_id}:recalled",
+            )
+            tool, cache_key = "memory", None
+        else:
+            request = mapping_request([FileProfile.model_validate(p) for p in state["profiles"]])
+            proposal = call_llm(run_id, "propose_mapping", request, MappingProposal, budget)
+            tool, cache_key = "llm", request.cache_key
+        problems = proposal.mapping.problems(headers)
         return {
             "mapping_proposal": proposal.model_dump(mode="json"),
             "mapping_problems": problems,
+            "usage": budget.snapshot(),
             "status": "awaiting_mapping_confirmation",
             "trajectory": [
                 {
                     "step": "propose_mapping",
-                    "tool": "llm",
-                    "cache_key": request.cache_key,
+                    "tool": tool,
+                    "cache_key": cache_key,
                     "problems": len(problems),
                 }
             ],
@@ -308,6 +429,12 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 {"mapping": mapping_json, "proposal_problems": state["mapping_problems"]},
                 dedupe_key=f"{run_id}:mapping",
             )
+        if deps.mapping_memory_days:  # only a human-confirmed mapping is ever remembered
+            store.remember_mapping(
+                header_fingerprint(_headers(state)), mapping_json, analyst, run_id
+            )
+        if governance:
+            governance.on_mapping_confirmed(run_id, analyst)
         return {
             "mapping": mapping_json,
             "mapping_confirmed_by": analyst,
@@ -341,6 +468,12 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 raise EngineInputError("input files changed between ingest and reconcile")
             result = reconcile(inputs, deps.recon_config)
             span.set(discrepancies=len(result.discrepancies))
+            if len(result.discrepancies) > limits.max_findings:
+                raise LimitExceeded(
+                    "max_findings",
+                    f"{len(result.discrepancies)} findings > {limits.max_findings}; "
+                    "this usually means the confirmed mapping is wrong",
+                )
         store.update_run(
             run_id,
             status="classifying",
@@ -367,50 +500,85 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         }
 
     def classify_exceptions(state: RunState) -> RunState:
+        run_id = state["run_id"]
+        budget = RunBudget(limits, state.get("usage"))
         exceptions: dict[str, dict] = {}
         for raw in state["discrepancies"]:
             d = Discrepancy.model_validate(raw)
-            out = call_llm(
-                state["run_id"],
-                "classify_exception",
-                classification_request(d),
-                ClassificationOutput,
-            )
-            category = constrain_category(d.kind, out.category.value)
+            held = screen_prompt_text(run_id, raw)
+            out = None
+            if held is None:
+                try:
+                    out = call_llm(
+                        run_id,
+                        "classify_exception",
+                        classification_request(d),
+                        ClassificationOutput,
+                        budget,
+                    )
+                except DEGRADABLE as exc:
+                    held = record_degraded(run_id, d.id, "classify_exception", exc)
+            if out is not None:
+                proposed, reason = out.category.value, out.reason
+                category = constrain_category(d.kind, proposed)
+            else:
+                category = ExceptionCategory.OTHER_NEEDS_REVIEW
+                proposed, reason = category.value, held
             exceptions[d.id] = {
                 **raw,
-                "proposed_category": out.category.value,
+                "proposed_category": proposed,
                 "category": category.value,
-                "classification_reason": out.reason,
+                "classification_reason": reason,
                 **assign(raw, category.value),
                 "status": DRAFTED,
                 "verdicts": [],
                 "reviews": [],
+                "degraded": held,
             }
         return {
             "exceptions": exceptions,
+            "discrepancies": [],  # now held in `exceptions`; don't checkpoint it twice
+            "usage": budget.snapshot(),
             "trajectory": [
                 {"step": "classify_exceptions", "tool": "llm", "count": len(exceptions)}
             ],
         }
 
     def draft_rationale(state: RunState) -> RunState:
+        run_id = state["run_id"]
+        budget = RunBudget(limits, state.get("usage"))
         exceptions = {k: dict(v) for k, v in state["exceptions"].items()}
         for exc_id in sorted(exceptions):
             exc = exceptions[exc_id]
-            out = call_llm(
-                state["run_id"],
-                "draft_rationale",
-                rationale_request(_discrepancy(exc), exc["category"]),
-                RationaleOutput,
-            )
+            if not exc["degraded"]:
+                try:
+                    out = call_llm(
+                        run_id,
+                        "draft_rationale",
+                        rationale_request(_discrepancy(exc), exc["category"]),
+                        RationaleOutput,
+                        budget,
+                    )
+                except DEGRADABLE as err:
+                    exc["degraded"] = record_degraded(run_id, exc_id, "draft_rationale", err)
+                else:
+                    exc.update(
+                        rationale=out.rationale,
+                        remediation_note=out.remediation_note,
+                        cited_evidence=out.cited_evidence,
+                    )
+                    continue
             exc.update(
-                rationale=out.rationale,
-                remediation_note=out.remediation_note,
-                cited_evidence=out.cited_evidence,
+                rationale=exc["summary"],
+                remediation_note=(
+                    "Automated drafting did not run for this finding. Review the evidence rows "
+                    "and decide the remediation manually."
+                ),
+                cited_evidence=evidence_keys(exc),
             )
         return {
             "exceptions": exceptions,
+            "usage": budget.snapshot(),
             "status": "validating",
             "trajectory": [{"step": "draft_rationale", "tool": "llm", "count": len(exceptions)}],
         }
@@ -434,8 +602,28 @@ def build_graph(deps: AgentDeps) -> StateGraph:
             exc = exceptions[exc_id]
             if exc["status"] not in NEEDS_VALIDATION:
                 continue
+            attempt = len(exc["verdicts"]) + 1
             with tracer.span(run_id, "validate_policy", "TOOL_EXEC", exception_id=exc_id) as span:
-                verdict = combine(evaluate_fail_closed(gate, policy_subject(exc)), run_verdict)
+                if exc.get("degraded"):  # template text: hold it, there's nothing to score
+                    verdict = PolicyVerdict(
+                        decision="BLOCK",
+                        policy_id=gate.policy_id,
+                        enforcement="harness_hold",
+                        error=exc["degraded"],
+                        rules=[
+                            RuleResult(
+                                validator="harness_hold", status="FAIL", detail=exc["degraded"]
+                            )
+                        ],
+                    )
+                else:
+                    verdict = combine(evaluate_fail_closed(gate, policy_subject(exc)), run_verdict)
+                if governance:
+                    breaches = governance.on_verdict(run_id, exc, verdict, attempt, dict(state))
+                    if breaches:
+                        verdict = verdict.model_copy(
+                            update={"decision": "BLOCK", "rules": [*verdict.rules, *breaches]}
+                        )
                 span.set(
                     decision=verdict.decision,
                     policy_id=verdict.policy_id,
@@ -443,7 +631,6 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                     scores={r.validator: r.score for r in verdict.rules},
                 )
             evaluated += 1
-            attempt = len(exc["verdicts"]) + 1
             exc["verdicts"] = [*exc["verdicts"], verdict.model_dump(mode="json")]
             exc["status"] = BLOCKED if verdict.blocked else PASSED
             store.record_event(
@@ -485,11 +672,24 @@ def build_graph(deps: AgentDeps) -> StateGraph:
         round_ = state.get("review_round", 0) + 1
         exceptions = {k: dict(v) for k, v in state["exceptions"].items()}
         pending = sorted(k for k, v in exceptions.items() if v["status"] == BLOCKED)
+        final_round = round_ >= limits.max_review_rounds
+        if final_round:
+            store.record_event(
+                run_id,
+                "limit_reached",
+                SYSTEM_ACTOR,
+                {"limit": "max_review_rounds", "round": round_, "pending": pending},
+                dedupe_key=f"{run_id}:review_cap",
+            )
         decisions: dict[str, dict] = interrupt(
             {
                 "type": "exception_review",
                 "run_id": run_id,
                 "round": round_,
+                "max_rounds": limits.max_review_rounds,
+                "allowed_actions": (
+                    ["approve", "reject"] if final_round else ["approve", "edit", "reject"]
+                ),
                 "pending": pending,
             }
         )
@@ -514,8 +714,11 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                 elif action == "reject":
                     exc["status"] = REJECTED
                 elif action == "edit":
+                    if final_round:  # the service refuses this first; this is the backstop
+                        raise ValueError(f"edit is not allowed in final round {round_}")
                     exc["rationale"] = dec.get("rationale") or exc["rationale"]
                     exc["remediation_note"] = dec.get("remediation_note") or exc["remediation_note"]
+                    exc["degraded"] = None  # human text now, so the gate can judge it
                     exc["status"] = EDITED
                 else:
                     raise ValueError(f"unknown review action {action!r}")
@@ -528,6 +731,8 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                     subject_id=exc_id,
                     dedupe_key=f"{run_id}:review:{exc_id}:{round_}",
                 )
+                if governance:
+                    governance.on_review(run_id, exc_id, analyst, action, round_)
         return {
             "exceptions": exceptions,
             "review_round": round_,
@@ -564,6 +769,7 @@ def build_graph(deps: AgentDeps) -> StateGraph:
                     "cited_evidence": exc["cited_evidence"],
                     "final_verdict": exc["verdicts"][-1],
                     "human_override": exc["status"] == APPROVED_OVERRIDE,
+                    "degraded": exc.get("degraded"),
                     "reviews": exc["reviews"],
                 }
                 written += store.append_log(run_id, exc_id, entry)

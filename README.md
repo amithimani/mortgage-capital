@@ -10,10 +10,12 @@ An AI-assisted reconciliation agent for mortgage servicing data, with EU AI Act 
 It surfaces exceptions such as missing payments, duplicate direct debits and rate-vs-margin
 breaches, each with row-level evidence, a drafted rationale and a remediation note.
 
-This is **Use Case 1** of the Disseqt FDE exercise. **[docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md)**
-maps every requirement in the brief to code, with the open gaps and the access needed.
-See **[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)** for the full design,
-timeline and the verified Disseqt SDK surface.
+This covers **both use cases** of the Disseqt FDE exercise, on mock data and mock endpoints.
+**[docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md)** maps every requirement in the brief
+to code, with the open gaps and the access needed. **[docs/HARNESS.md](docs/HARNESS.md)** covers
+agent limits, memory, the mocks and the evaluation harness.
+**[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)** has the full design, timeline and
+the verified Disseqt SDK surface.
 
 ## Design in one paragraph
 
@@ -36,10 +38,13 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 | Baseline + metrics (`baseline.py`, `metrics.py`) | ✅ Week 1 baseline harness; per-run and cross-run analytics with drift |
 | Run store (`store.py`) | ✅ manifests, append-only event trail + remediation log, reviews, idempotency keys |
 | FastAPI service (`api.py`, `service.py`) | ✅ plan §4 endpoints + `/events` audit trail |
-| Container image | ✅ hardened, hash-locked, smoke-tested (CI workflow in `deploy/ci/`); Kubernetes manifest — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| Real LLM provider (Claude / Gemini) | Pending key; drops in behind `LLMProvider` |
-| Disseqt tracing + `DisseqtPolicyGate` | Week 1–3 (needs credentials); drops in behind `Tracer` / `PolicyGate` |
-| UC2 governance layer | Out of scope for the exercise (UC1 chosen); UC1 already emits its evidence |
+| Container image | ✅ hardened, hash-locked, smoke-tested (CI in `.github/workflows/`); Kubernetes manifest — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Agent harness (`limits.py`, `memory.py`) | ✅ loop, call, token, cost and time limits; circuit breaker; checkpoint pruning; analyst-confirmed mapping memory |
+| Evaluation harness (`evaluation.py`) | ✅ `mc-recon eval`: 16 normal and hostile scenarios, scorecard, run in CI |
+| Mock endpoints (`mocks/`) | ✅ Disseqt and OpenAI-compatible LLM over real HTTP, with fault injection |
+| UC2 governance layer (`governance.py`) | ✅ three EU AI Act controls, evidence with freshness SLA, coverage gaps, report |
+| Real LLM provider | `OpenAICompatibleProvider` is built and tested against the mock; needs a key |
+| Real Disseqt | Clients built against an assumed API shape (`disseqt_http.py`); needs credentials and docs |
 
 ## Quick start
 
@@ -47,11 +52,13 @@ drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and 
 python -m venv .venv && source .venv/bin/activate     # Python 3.11+
 pip install -e ".[dev]"
 
-pytest                                                 # 126 tests, ~2s, no network, no LLM
+pytest                                                 # no network, no LLM
+mc-recon eval                                          # 16 scenarios: limits, outages, attacks
 mc-recon reconcile data/synthetic/pair_01 --check      # run the engine vs ground truth
 mc-recon profile   data/synthetic/pair_01              # what the mapping LLM will see
 mc-recon generate                                      # regenerate fixtures (byte-identical)
 mc-recon serve                                         # the agent API, on fakes (PORT, MC_* env)
+mc-recon mock                                          # mock Disseqt + LLM on :8100
 ```
 
 ### As a container
@@ -103,10 +110,14 @@ curl -s localhost:8000/runs/$RID/events | jq '.[] | {event_type, actor, subject_
 | `GET /runs/{id}/metrics` | Latency per step, human wait, LLM calls, tokens and cost, PASS/BLOCK, per-validator scores, owner and priority mix, drift vs baseline |
 | `GET /metrics` | The same across all runs (p50/p95 latency, pooled validator pass rates) |
 | `POST /baselines`, `GET /baselines/latest` | Week 1 baseline: manual-process notes through the same checks |
+| `GET /runs/{id}/harness` | Usage against every limit, limits reached, held findings, state size |
+| `GET /memory/mappings`, `DELETE /memory/mappings/{fingerprint}` | Inspect or remove remembered mappings |
+| `GET /governance/system`, `/controls`, `/coverage`, `/evidence`, `/report` | UC2: registry record, control status, requirement coverage, evidence, report (`?format=markdown`) |
 
 **Exception lifecycle:** `drafted` → `passed` or `blocked`. A blocked exception goes to review:
-`approve` makes it `approved_override` (logged and flagged as a human override), `edit` makes it
-`edited` and sends it back through the policy, and `reject` makes it `rejected` (not logged).
+`approve` needs a `note` and makes it `approved_override` (logged and flagged as a human
+override), `edit` makes it `edited` and sends it back through the policy, and `reject` makes it
+`rejected` (not logged). The last review round refuses `edit`, so the loop always ends.
 Logged exceptions end up `logged`. When the policy gate is down, or returns a non-final async
 verdict, the result is BLOCK.
 
@@ -138,6 +149,13 @@ src/mc_recon/
   config.py          # env-var settings, validated at startup
   server.py          # `mc-recon serve`: production entrypoint
   cli.py             # `mc-recon` entry point
+  limits.py          # AgentLimits + RunBudget: every per-run bound
+  memory.py          # checkpoint pruning, mapping-memory guards
+  governance.py      # UC2: controls, evidence, coverage, report
+  evaluation.py      # `mc-recon eval` scenarios and scorecard
+  transport.py       # bounded retries for external HTTP
+  disseqt_http.py    # policy, trace and registry clients
+  mocks/app.py       # mock Disseqt + LLM + fault injection
 data/synthetic/pair_0{1,2,3}/   # committed fixtures (regenerated byte-for-byte by tests)
 docs/IMPLEMENTATION_PLAN.md
 docs/DEPLOYMENT.md
@@ -145,7 +163,7 @@ Dockerfile, .dockerignore, docker-compose.yml, Makefile
 requirements/        # hash-pinned lock files used by the image (`make lock` to refresh)
 deploy/kubernetes/   # portable manifest (EKS / AKS / GKE / on-prem)
 scripts/smoke_test.py
-deploy/ci/           # GitHub Actions CI (move to .github/workflows/ to activate)
+.github/workflows/   # GitHub Actions CI
 tests/
 ```
 

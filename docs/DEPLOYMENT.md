@@ -55,7 +55,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/mc-recon:<t
 ```
 
 `scripts/smoke_test.py <url>` has no dependencies beyond Python. Run it after any deploy, against
-any URL. CI (`deploy/ci/github-actions-ci.yml`) runs the tests, builds the image, starts it hardened, and
+any URL. CI (`.github/workflows/ci.yml`) runs the tests, builds the image, starts it hardened, and
 smoke-tests it on every push. To activate it, move the file to `.github/workflows/ci.yml`.
 
 If you build behind a TLS-intercepting proxy, pass its CA as a BuildKit secret. It is used

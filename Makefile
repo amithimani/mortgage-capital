@@ -2,13 +2,19 @@ IMAGE ?= mc-recon
 TAG   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 PORT  ?= 8000
 
-.PHONY: install test lint lock image run smoke
+.PHONY: install test eval mock lint lock image run smoke
 
 install:            ## dev install
 	pip install -e ".[dev]"
 
 test:               ## unit + flow + API tests (no network, no LLM)
 	pytest
+
+eval:               ## every harness scenario, as a scorecard (no network, no LLM)
+	mc-recon eval
+
+mock:               ## serve the mock Disseqt and LLM endpoints on :8100
+	mc-recon mock
 
 lint:
 	ruff check src tests scripts && ruff format --check src tests scripts

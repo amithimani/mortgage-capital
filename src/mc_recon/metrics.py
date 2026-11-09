@@ -22,6 +22,7 @@ from statistics import median
 
 MODEL_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     "recorded-fake": (0.0, 0.0),
+    "mock-llm": (0.5, 1.5),  # illustrative, so cost tracking and budgets are exercised
 }
 """model_id -> (USD per 1M input tokens, USD per 1M output tokens)."""
 

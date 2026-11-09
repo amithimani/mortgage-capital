@@ -41,6 +41,7 @@ def make_service(
     data_root: Path = SYNTHETIC_DIR,
     store: RunStore | None = None,
     checkpointer=None,
+    governance=None,
 ) -> tuple[RunService, InMemoryTracer]:
     tracer = InMemoryTracer()
     deps = AgentDeps(
@@ -48,6 +49,7 @@ def make_service(
         gate=gate or FakePolicyGate(),
         store=store or RunStore(),
         tracer=tracer,
+        governance=governance,
     )
     return RunService(deps, data_root, checkpointer=checkpointer), tracer
 

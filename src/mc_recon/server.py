@@ -18,10 +18,18 @@ def serve(settings: Settings | None = None) -> int:
         settings = settings or Settings.from_env()
         from .api import build_service, create_app
 
-        app = create_app(build_service(settings))
+        app = create_app(build_service(settings), settings.analyst_tokens)
     except ConfigError as exc:
         print(f"mc-recon: {exc}", file=sys.stderr)
         return 2
+
+    if not settings.analyst_tokens:
+        print(
+            "mc-recon: WARNING no MC_ANALYST_TOKENS set; identity is an unverified header "
+            "and reads are unauthenticated. Local PoC use only.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     import uvicorn
 

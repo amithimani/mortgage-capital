@@ -12,6 +12,12 @@ services:
     environment:
       PORT: "8000"
       MC_LOG_LEVEL: info
+      MC_LLM_PROVIDER: ${MC_LLM_PROVIDER:-fake}
+      MC_POLICY_GATE: ${MC_POLICY_GATE:-fake}
+      MC_LLM_BASE_URL: http://mock:8100
+      MC_LLM_API_KEY: mock-key
+      MC_DISSEQT_URL: ${MC_DISSEQT_URL:-}
+      MC_DISSEQT_API_KEY: mock-key
       # MC_DATA_ROOT: /data            # mount real datasets and point here
     volumes:
       - mc-recon-data:/app/var
@@ -22,6 +28,22 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+
+  # Mock Disseqt + LLM. Run the agent against it with:
+  #   MC_LLM_PROVIDER=http MC_POLICY_GATE=http MC_DISSEQT_URL=http://mock:8100 \
+  #     docker compose --profile mocks up --build
+  mock:
+    profiles: [mocks]
+    image: mc-recon:local
+    command: ["mc-recon", "mock", "--port", "8100"]
+    ports:
+      - "8100:8100"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   mc-recon-data:

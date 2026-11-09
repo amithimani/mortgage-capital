@@ -3,10 +3,10 @@
 **Use Case 1:** Data Reconciliation & Anomaly Detection agent (LangGraph + FastAPI)
 **Use Case 2:** Risk, Policy & Regulatory Compliance layer (EU AI Act Arts. 12, 14, 15)
 
-> **Scope for this exercise: Use Case 1.** The brief asks for one of the two use cases. UC1 is
-> implemented. UC2 is kept below as the design it would plug into, since UC1 already emits the
-> evidence UC2 needs. Requirement-by-requirement status, gaps and the access list are in
-> [BRIEF_TRACEABILITY.md](BRIEF_TRACEABILITY.md).
+> **Scope for this exercise: both use cases, on mock data and mock endpoints.** UC2 is an
+> isolated layer over UC1's evidence (`governance.py`). Requirement-by-requirement status, gaps
+> and the access list are in [BRIEF_TRACEABILITY.md](BRIEF_TRACEABILITY.md). Agent limits, memory
+> and the evaluation harness are in [HARNESS.md](HARNESS.md).
 
 ## Change log
 

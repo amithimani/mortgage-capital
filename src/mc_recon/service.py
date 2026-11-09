@@ -10,6 +10,7 @@ and the resume calls move to a background worker and the API returns ``202``.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import sqlite3
 import threading
@@ -29,6 +30,9 @@ from .baseline import has_notes, run_baseline
 from .data.synthetic import FILE_NAMES
 from .engine import ColumnMapping, Source
 from .graph import AgentDeps, build_graph, manifest_base
+from .limits import RunBudget
+from .llm.provider import canonical_json
+from .memory import prune_checkpoints
 from .observability import StoreExporter
 
 _DATASET = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -58,6 +62,16 @@ class Invalid(ServiceError):
     status_code = 422
 
 
+class TooLarge(ServiceError):
+    status_code = 413
+
+
+class RunFailed(ServiceError):
+    """The agent itself failed: a server-side problem, so retries and alerts read it correctly."""
+
+    status_code = 500
+
+
 class ReviewDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -70,6 +84,8 @@ class ReviewDecision(BaseModel):
     def _edit_has_content(self) -> ReviewDecision:
         if self.action == "edit" and not (self.rationale or self.remediation_note):
             raise ValueError("an edit must supply rationale and/or remediation_note")
+        if self.action == "approve" and not (self.note and self.note.strip()):
+            raise ValueError("approving a blocked exception is an override and needs a note")
         return self
 
 
@@ -91,8 +107,11 @@ class RunService:
         self.store = deps.store
         self.data_root = Path(data_root).resolve()
         deps.tracer.add_exporter(StoreExporter(self.store))  # spans feed /metrics
-        self.graph = build_graph(deps).compile(checkpointer=checkpointer or InMemorySaver())
+        self.checkpointer = checkpointer or InMemorySaver()
+        self.graph = build_graph(deps).compile(checkpointer=self.checkpointer)
         self._locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+        if deps.governance:
+            deps.tracer.default_attributes["application_id"] = deps.governance.system.application_id
 
     # --- internals -------------------------------------------------------------------------
 
@@ -110,6 +129,10 @@ class RunService:
         missing = [p for p in paths.values() if not Path(p).is_file()]
         if missing:
             raise Invalid(f"dataset {dataset!r} is missing files", detail=missing)
+        limit = self.deps.limits.max_file_bytes
+        oversized = [Path(p).name for p in paths.values() if Path(p).stat().st_size > limit]
+        if oversized:  # checked before anything reads the file into memory
+            raise TooLarge(f"files exceed {limit} bytes", detail=oversized)
         return paths
 
     def _require_run(self, run_id: str) -> dict:
@@ -136,14 +159,21 @@ class RunService:
             with self.deps.tracer.span(
                 run_id, "agent_run", "AGENT_EXEC", segment=segment, model_id=self.deps.llm.model_id
             ) as span:
-                self.graph.invoke(payload, self._config(run_id))
+                config = {
+                    **self._config(run_id),
+                    "recursion_limit": self.deps.limits.recursion_limit,
+                }
+                self.graph.invoke(payload, config)
                 pending = self._interrupt(run_id)
                 span.set(stopped_at=pending["type"] if pending else "completed")
         except Exception as exc:
             self.store.update_run(run_id, status="failed", error=f"{type(exc).__name__}: {exc}")
-            raise ServiceError(f"run {run_id} failed: {exc}") from exc
+            self._locks.pop(run_id, None)
+            raise RunFailed(f"run {run_id} failed: {exc}") from exc
+        prune_checkpoints(self.checkpointer, run_id)
         pending = self._interrupt(run_id)
         if pending is None:
+            self._locks.pop(run_id, None)  # finished: nothing can contend for this run again
             return  # emit_log already marked it completed
         status = {
             "mapping_confirmation": "awaiting_mapping_confirmation",
@@ -187,6 +217,7 @@ class RunService:
             "confirmed_by": values.get("mapping_confirmed_by"),
             "profiles": values.get("profiles"),
             "input_screen": values.get("input_screen", []),
+            "input_screen_full": values.get("input_screen_full", []),
         }
 
     def confirm_mapping(self, run_id: str, analyst: str, mapping: dict | None) -> dict:
@@ -227,6 +258,11 @@ class RunService:
                 raise Conflict("run is not awaiting exception review")
             if exception_id not in pending["pending"]:
                 raise Conflict(f"exception {exception_id} is not pending review")
+            if decision.action not in pending["allowed_actions"]:
+                raise Conflict(
+                    f"review round limit reached ({pending['max_rounds']}); "
+                    f"allowed actions: {pending['allowed_actions']}"
+                )
             round_ = pending["round"]
             body = {"analyst": analyst, **decision.model_dump(exclude_none=True)}
             try:
@@ -300,3 +336,41 @@ class RunService:
     def trajectory(self, run_id: str) -> list[dict]:
         self._require_run(run_id)
         return (self._state(run_id).values or {}).get("trajectory", [])
+
+    # --- harness + memory ------------------------------------------------------------------
+
+    def harness(self, run_id: str) -> dict:
+        """What this run consumed against its limits, and every limit it hit."""
+        self._require_run(run_id)
+        values = self._state(run_id).values or {}
+        limits = self.deps.limits
+        return {
+            "usage": values.get("usage") or RunBudget(limits).snapshot(),
+            "review_rounds": values.get("review_round", 0),
+            "limits": {
+                **{f.name: getattr(limits, f.name) for f in dataclasses.fields(limits)},
+                "recursion_limit": limits.recursion_limit,
+            },
+            "limit_events": self.store.events(run_id, "limit_reached"),
+            "degraded": sorted(
+                k for k, v in values.get("exceptions", {}).items() if v.get("degraded")
+            ),
+            "state_bytes": len(canonical_json(values)),
+        }
+
+    def list_memory(self) -> list[dict]:
+        return self.store.list_mappings()
+
+    def forget_memory(self, fingerprint: str, analyst: str) -> dict:
+        if not self.store.forget_mapping(fingerprint):
+            raise NotFound(f"no remembered mapping {fingerprint}")
+        self.store.record_event("_system", "mapping_forgotten", analyst, {}, subject_id=fingerprint)
+        return {"forgotten": fingerprint}
+
+    # --- governance (Use Case 2) -----------------------------------------------------------
+
+    @property
+    def governance(self):
+        if self.deps.governance is None:
+            raise NotFound("the governance layer is not enabled on this service")
+        return self.deps.governance

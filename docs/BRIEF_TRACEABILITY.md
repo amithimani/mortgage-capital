@@ -5,14 +5,25 @@ exercise, pick one of two). The brief itself is confidential and is not stored i
 This page summarises its requirements in our own words and maps each one to the
 implementation.
 
-**Scope chosen:** Use Case 1, Data Reconciliation & Anomaly Detection. Use Case 2 (EU AI Act
-controls) is out of scope for this exercise. UC1 is built to emit the evidence UC2 would consume
-(oversight events, validator scores, an append-only audit trail), so UC2 can follow without
-changing UC1's design.
+**Scope:** both use cases, on mock data and mock endpoints. The brief asks for one. UC1 is the
+core build. UC2 is an isolated layer over UC1's evidence (`governance.py`, `MC_GOVERNANCE=off`
+disables it). External surfaces are mocked, so "✅ on mock" means the behaviour is real and the
+counterparty isn't. Limits, memory and the evaluation harness are in [HARNESS.md](HARNESS.md).
 
 Status key: ✅ done · 🟡 partial / on fakes · ⛔ blocked on access · ❌ not started
 
-## Step-by-step
+## Use Case 2: Risk, Policy and Regulatory Compliance
+
+| # | Brief requirement | Status | Where / what's missing |
+|---|---|---|---|
+| 1 | Register as a governed AI system; `application_id` on every span | ✅ on mock | `AISystem`, `GET /governance/system`; `application_id` stamped by the tracer. `risk_level`, `provider_role` and retention are placeholders for compliance to set |
+| 2 | Three controls: grounding (Art 15), human loop (Art 14), log pipeline (Art 12) | ✅ | `CONTROLS` in `governance.py`, block severity |
+| 3 | Each control an executable `metric_threshold` test evidenced by `sdk_event` | ✅ locally / ⛔ Disseqt | Faithfulness and context relevance against a threshold; oversight events; record completeness. The real governance API is behind a login |
+| 4 | Block severity: breach holds output; recorded either way | ✅ | A breach adds a failing rule to the verdict, so the exception goes to review |
+| 5 | Flow to coverage; evidence freshness SLA; a control is met only while current; gaps surfaced | ✅ | Append-only `governance_evidence`, 24-hour SLA, statuses `no_evidence` / `stale` / `breached` / `met` |
+| 6 | Report: control status, coverage, freshness, gaps | ✅ | `GET /governance/report` (JSON or `?format=markdown`), generated from evidence recorded at run time |
+
+## Use Case 1: step-by-step
 
 | # | Brief requirement | Status | Where / what's missing |
 |---|---|---|---|
@@ -29,7 +40,7 @@ Status key: ✅ done · 🟡 partial / on fakes · ⛔ blocked on access · ❌ 
 | 5a | Faithfulness + context-relevance per drafted exception | 🟡 | `FakePolicyGate` stand-ins (number grounding, citation scope) |
 | 5b | Answer-relevance | ✅ on fake | Names this loan and addresses this category (G3 closed) |
 | 5c | Tool-call-accuracy + plan-coherence (engine called correctly and in order) | ✅ on fake | Each step appends to the run `trajectory`. The gate checks the engine ran once on the confirmed mapping and ingested files, every finding was classified and drafted, and the step order. Merged into every exception's verdict; `GET /runs/{id}/trajectory` (G3 closed) |
-| 5d | Prompt-injection **and PII** checks on ingested files | ✅ on fake | Injection + PII (e-mail, UK phone, NI number, sort code, IBAN) screens on everything that reaches a prompt. Flagged samples are withheld and logged with the failed rule (G4 closed) |
+| 5d | Prompt-injection **and PII** checks on ingested files | ✅ on fake | Injection + PII (e-mail, UK phone, NI number, sort code, IBAN) screens on prompt samples, on every distinct value in text columns, and on each finding's text before any prompt. Flagged samples are withheld, flagged findings skip the LLM and are held (G4 closed) |
 | 6 | Realtime policy bundling validators with thresholds → one PASS/BLOCK; BLOCK holds for human review | ✅ on fake / ⛔ real | `PolicyGate`, fail-closed, review queue with approve / edit (re-checked) / reject. The real policy is authored in the Disseqt dashboard |
 | 7 | Week 1 baseline: run samples of the current manual process through the same checks | ✅ simulated | `baseline.py`: manual-process notes go through the **same gate** with the same grounding; results stored (`POST /baselines`, `mc-recon baseline`). Notes are simulated until real anonymised ones are provided (same schema) (G5 closed) |
 | 8 | Dashboard analytics: trace timeline, per-validator scores, PASS/BLOCK rates, tokens and cost per run, latency per step, drift vs baseline | ✅ locally / ⛔ Disseqt | `metrics.py`: `GET /runs/{id}/metrics` and `GET /metrics` cover all of them, plus human wait time. The Disseqt dashboard needs access (G6 closed) |

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ from .provider import (
     TokenUsage,
     canonical_json,
 )
+
+CALL_HISTORY = 2000
 
 
 class Recording(BaseModel):
@@ -76,7 +79,8 @@ class RecordedFakeProvider:
             if existing is not None and existing.output != rec.output:
                 raise ValueError(f"conflicting recordings for cache_key {rec.cache_key}")
             self._index[rec.cache_key] = rec
-        self.calls: list[LLMRequest] = []
+        self.calls: deque[LLMRequest] = deque(maxlen=CALL_HISTORY)
+        """Recent requests, for tests. Bounded because the service also runs on this fake."""
 
     @classmethod
     def from_files(cls, *paths: Path) -> RecordedFakeProvider:

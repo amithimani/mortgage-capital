@@ -95,6 +95,14 @@ def main() -> int:
     )
     status, log_entry = 200, log[0]
     check(bool(log_entry.get("owner") and log_entry.get("priority")), "log has owner + priority")
+    status, h = call(base, "GET", f"/runs/{rid}/harness")
+    check(
+        status == 200 and h["usage"]["llm_calls"] <= h["limits"]["max_llm_calls"],
+        f"harness: {h['usage']['llm_calls']} of {h['limits']['max_llm_calls']} LLM calls",
+    )
+    status, cov = call(base, "GET", "/governance/coverage")
+    if status == 200:
+        check(cov["gaps"] == [], f"governance: {cov['covered']}/{cov['total']} requirements")
     print(f"OK run {rid}: status={run['status']} counts={run['exception_counts']}")
     return 0
 
