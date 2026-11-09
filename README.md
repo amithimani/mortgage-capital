@@ -1,221 +1,301 @@
-# Mortgage Capital — Reconciliation & Anomaly Detection PoC
+# Mortgage Capital: Reconciliation Agent with EU AI Act Controls
 
-An AI-assisted reconciliation agent for mortgage servicing data, with EU AI Act governance
-(Arts. 12, 14, 15) built in. It reconciles three files per period:
+A proof of concept that reconciles mortgage data, explains every break in plain English, and
+produces the audit evidence a regulator would ask for. It is the take-home for the Disseqt FDE
+exercise, and runs entirely on synthetic data and mock endpoints.
 
-- the **servicing extract** (scheduled payments, balances, rates)
-- the **payments file** (cash actually received)
-- the **investor report** (what was reported to funders)
+Each period, three files should agree and often don't:
 
-It surfaces exceptions such as missing payments, duplicate direct debits and rate-vs-margin
-breaches, each with row-level evidence, a drafted rationale and a remediation note.
-
-This covers **both use cases** of the Disseqt FDE exercise, on mock data and mock endpoints.
-**[docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md)** maps every requirement in the brief
-to code, with the open gaps and the access needed. **[docs/HARNESS.md](docs/HARNESS.md)** covers
-agent limits, memory, the mocks and the evaluation harness.
-**[docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)** has the full design, timeline and
-the verified Disseqt SDK surface.
-
-## Design in one paragraph
-
-The LLM never touches a number. Deterministic, unit-tested code does all matching, netting and
-comparison (`mc_recon.engine`). The LLM only (1) proposes how raw columns map to the canonical
-schema, which an analyst confirms, (2) picks an exception category from a closed list that is
-constrained per finding type, and (3) drafts prose grounded only in the evidence rows. Every
-drafted exception passes a Disseqt realtime policy. A BLOCK goes to a human and is never dropped.
-
-## Status
-
-| Component | State |
+| File | What it says |
 |---|---|
-| Deterministic engine (`engine/`) | ✅ loader, mapping validation, profiling, reconciliation rules |
-| Synthetic data (`data/`) | ✅ 3 seeded pairs + error catalog + oracle LLM recordings |
-| LLM adapter (`llm/`) | ✅ provider protocol, strict output schemas, payload builders, recorded fake |
-| LangGraph agent (`graph.py`) | ✅ all 9 nodes, SQLite checkpointer, durable interrupts, BLOCK → review → re-check loop |
-| Policy gate (`policy.py`) | ✅ fakes for every validator in the brief (faithfulness, context and answer relevance, tool-call accuracy, plan coherence, injection, PII), fail closed |
-| Remediation (`remediation.py`) | ✅ deterministic owner, priority P1–P3, SLA, amount at risk |
-| Baseline + metrics (`baseline.py`, `metrics.py`) | ✅ Week 1 baseline harness; per-run and cross-run analytics with drift |
-| Run store (`store.py`) | ✅ manifests, append-only event trail + remediation log, reviews, idempotency keys |
-| FastAPI service (`api.py`, `service.py`) | ✅ plan §4 endpoints + `/events` audit trail |
-| Container image | ✅ hardened, hash-locked, smoke-tested (CI in `.github/workflows/`); Kubernetes manifest — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| Agent harness (`limits.py`, `memory.py`) | ✅ loop, call, token, cost and time limits; circuit breaker; checkpoint pruning; analyst-confirmed mapping memory |
-| Evaluation harness (`evaluation.py`) | ✅ `mc-recon eval`: 16 normal and hostile scenarios, scorecard, run in CI |
-| Mock endpoints (`mocks/`) | ✅ Disseqt and OpenAI-compatible LLM over real HTTP, with fault injection |
-| UC2 governance layer (`governance.py`) | ✅ three EU AI Act controls, evidence with freshness SLA, coverage gaps, report |
-| Real LLM provider | `OpenAICompatibleProvider` is built and tested against the mock; needs a key |
-| Real Disseqt | Clients built against an assumed API shape (`disseqt_http.py`); needs credentials and docs |
+| **Servicing extract** | What each loan should have paid, and its balance and rates |
+| **Payments file** | What cash actually arrived |
+| **Investor report** | What was reported to the funders |
+
+The agent finds the disagreements, such as missing payments, duplicate direct debits and rate
+versus margin breaches. Each one comes with its evidence rows, a drafted explanation, an owner, a
+priority and a remediation note. Anything that fails validation is held for a human.
+
+> **Real versus mocked.** The reconciliation engine, agent, limits, audit trail and governance
+> logic are real code. The LLM and Disseqt are mocks reached over real HTTP, and the data is
+> synthetic. No real model or Disseqt endpoint has been called.
 
 ## Quick start
 
+Requires Python 3.11+.
+
 ```bash
-python -m venv .venv && source .venv/bin/activate     # Python 3.11+
+python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-pytest                                                 # no network, no LLM
-mc-recon eval                                          # 16 scenarios: limits, outages, attacks
-mc-recon reconcile data/synthetic/pair_01 --check      # run the engine vs ground truth
-mc-recon profile   data/synthetic/pair_01              # what the mapping LLM will see
-mc-recon generate                                      # regenerate fixtures (byte-identical)
-mc-recon serve                                         # the agent API, on fakes (PORT, MC_* env)
-mc-recon mock                                          # mock Disseqt + LLM on :8100
+pytest          # unit, flow and API tests; no network, no LLM
+mc-recon eval   # scorecard of 16 normal and hostile scenarios
+mc-recon serve  # the agent API on :8000
 ```
 
-### As a container
+With the server running, walk through one reconciliation:
 
 ```bash
-docker build -t mc-recon .
-docker run -p 8000:8000 -v mc-recon-data:/app/var mc-recon     # or: docker compose up --build
-python scripts/smoke_test.py http://localhost:8000
+H=(-H X-Analyst-Id:alice -H content-type:application/json)
+
+# Start a run. It pauses for a human before anything is reconciled.
+RID=$(curl -s -X POST localhost:8000/runs "${H[@]}" -d '{"dataset":"pair_01"}' | jq -r .run_id)
+
+# Review the proposed column mapping, then confirm it.
+curl -s localhost:8000/runs/$RID/mapping | jq '.proposal.mapping.payments, .problems'
+curl -s -X POST localhost:8000/runs/$RID/mapping/confirm "${H[@]}" -d '{}' | jq .status
+
+# See what it found, what it cost, and the compliance position.
+curl -s localhost:8000/runs/$RID/remediation-log | jq '.[] | {loan_id, category, owner, priority, rationale}'
+curl -s localhost:8000/runs/$RID/harness | jq .usage
+curl -s 'localhost:8000/governance/report?format=markdown'
 ```
 
-The image runs as a non-root user, works with a read-only root filesystem, takes all of its
-configuration from environment variables, and has liveness (`/healthz`) and readiness
-(`/readyz`) probes. **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** covers per-cloud notes
-(Kubernetes, ECS, Container Apps, Cloud Run), registries, secrets, and where SQLite state limits
-scaling.
+## Design
 
-`mc-recon reconcile` prints the full `ReconciliationResult` as JSON. With `--check` it compares
-the result against `seeded_errors.json` and exits non-zero on any miss or false positive.
+### Architecture
 
-## Running the agent
+```mermaid
+flowchart LR
+    analyst(["Analyst"])
 
-`mc-recon serve` (the container's entrypoint) starts the service with the recorded fake LLM (every pair's oracle
-recordings) and `FakePolicyGate`. State lives in `var/mc_recon.sqlite`; change it with
-`MC_DB_PATH`. Datasets come from `MC_DATA_ROOT` (default `data/synthetic`). The full variable
-list is in `mc_recon/config.py`. Mutating calls need
-an `X-Analyst-Id` header (a PoC stand-in for real auth) and accept `Idempotency-Key`.
+    subgraph service["Agent service"]
+        api["FastAPI<br/>auth, idempotency"]
+        agent["LangGraph agent<br/>durable pauses for humans"]
+        harness["Harness<br/>limits and budgets"]
+        engine["Deterministic engine<br/>all matching and arithmetic"]
+        gov["Governance layer<br/>EU AI Act controls"]
+        store[("SQLite<br/>append-only audit trail,<br/>checkpoints, memory")]
+    end
+
+    subgraph external["External, mocked over HTTP"]
+        llm["LLM<br/>OpenAI-compatible"]
+        disseqt["Disseqt<br/>policy, traces, registry"]
+    end
+
+    files[/"Servicing, payments,<br/>investor files"/] --> agent
+    analyst <--> api
+    api --> agent
+    agent --> engine
+    agent -- "mapping, category, prose" --> llm
+    agent -- "PASS or BLOCK" --> disseqt
+    agent -. "spans" .-> disseqt
+    harness -. "admits every LLM call" .-> agent
+    agent --> gov
+    agent --> store
+    gov --> store
+```
+
+Every external dependency sits behind an interface (`LLMProvider`, `PolicyGate`, span exporters),
+so a recorded fake, the HTTP mock and a real service are interchangeable through configuration.
+
+### How a run flows
+
+```mermaid
+flowchart TD
+    ingest["Ingest: parse, profile,<br/>screen for injection and PII"]
+    propose["Propose column mapping<br/>LLM, or analyst-confirmed memory"]
+    confirm{{"Analyst confirms mapping"}}
+    reconcile["Reconcile<br/>deterministic code, no LLM"]
+    classify["Classify each finding<br/>LLM, fixed categories"]
+    draft["Draft rationale and remediation<br/>LLM, evidence rows only"]
+    validate["Validate: policy gate<br/>and governance controls"]
+    review{{"Analyst reviews held items<br/>at most 3 rounds"}}
+    log[("Remediation log<br/>owner, priority, evidence")]
+    rejected["Rejected: not logged,<br/>decision stays on the audit trail"]
+
+    ingest --> propose --> confirm --> reconcile --> classify --> draft --> validate
+    validate -- "all PASS" --> log
+    validate -- "any BLOCK" --> review
+    review -- "edit: re-checked" --> validate
+    review -- "approve with a note:<br/>logged as an override" --> log
+    review -- "reject" --> rejected
+
+    classify -. "limit hit, LLM down or<br/>evidence failed the screen:<br/>finding kept and held" .-> validate
+```
+
+The dotted line is the design's key safety property. By the time the LLM is involved, the engine
+has already found the discrepancy, so losing the LLM costs automation and never a finding.
+
+### Principles
+
+1. **The LLM never touches a number.** Matching, netting and comparison are `Decimal` arithmetic
+   in tested code. The LLM only proposes a mapping, picks from a closed category list, and writes
+   prose from the evidence it is given.
+2. **Humans hold the decisions that matter.** Nothing reconciles until an analyst confirms the
+   mapping, and a failed validation can only be released by a person, who must record why.
+3. **Fail closed, fail loud.** A policy outage or unparseable verdict becomes BLOCK. Malformed
+   input stops the run with a specific error instead of producing a plausible result.
+4. **Every loop has a number on it.** The worst case of a run can be read from one config object.
+5. **Evidence is written at run time.** The audit trail is append-only, enforced by database
+   triggers, and the compliance report is a query over it.
+
+## Features
+
+### Use Case 1: reconciliation and anomaly detection
+
+| Capability | Detail |
+|---|---|
+| File intake | Handles non-canonical headers and mixed date and number formats; rejects anything ambiguous |
+| Human mapping checkpoint | LLM proposes, analyst confirms or edits, and the mapping is validated against the real headers |
+| Deterministic engine | Seven discrepancy types (below); identical inputs give byte-identical output |
+| Constrained classification | Category limited per finding type; anything else becomes `OTHER_NEEDS_REVIEW` |
+| Grounded explanations | Rationale and remediation note from the finding's evidence rows only |
+| Validation before release | Faithfulness, context and answer relevance, data leakage, tool-call accuracy, plan coherence |
+| Input safety | Prompt-injection and PII screens on samples, whole files, and each finding before any prompt |
+| Review workflow | `approve`, `edit` (re-validated) or `reject`, recorded with the analyst's identity |
+| Remediation log | Owner, priority P1 to P3, SLA, amount at risk, evidence and final verdict |
+| Baseline and analytics | Simulated manual process through the same checks; latency, tokens, cost, scores and drift |
+
+### Use Case 2: risk, policy and regulatory compliance
+
+| Control | Requirement | Evidenced by |
+|---|---|---|
+| `TECH-RAG-GROUNDING-CITE` | Art 15, Accuracy & Robustness | Faithfulness and context-relevance scores against a threshold |
+| `TECH-HUMAN-LOOP` | Art 14, Human Oversight | Mapping confirmation and review events, with analyst identity |
+| `TECH-LOG-PIPELINE` | Art 12, Record-Keeping | Completeness of model, inputs, rule version, approver and evidence |
+
+A breach holds the output for review and is recorded either way. Each evaluation writes evidence
+with a 24-hour freshness window, so a control counts as met only while its evidence is current.
+Stale or missing evidence appears as a coverage gap in `GET /governance/report`. The layer is
+separate from the agent and `MC_GOVERNANCE=off` disables it.
+
+### Agent harness
+
+| Area | What's bounded or managed |
+|---|---|
+| Loops | Review rounds (3; the last refuses `edit`), schema re-asks (1), graph recursion backstop |
+| Spend, per run | LLM calls (500), tokens (500k), cost ($5), LLM time (600s) |
+| Failure | Circuit breaker after 3 consecutive LLM failures; bounded retries with backoff on HTTP calls |
+| Input | File size and row limits; a flood of findings stops the run as a likely wrong mapping |
+| Prompts | One finding per call, no accumulating context; oversized prompts refused, never truncated |
+| Checkpoints | Pruned to the latest after each segment, with the audit trail untouched |
+| Long-term memory | Only analyst-confirmed mappings, with expiry and re-validation; an analyst still confirms |
+
+Defaults are overridable with `MC_LIMIT_<NAME>`, and `GET /runs/{id}/harness` shows a run's usage
+against them. [docs/HARNESS.md](docs/HARNESS.md) has the full table and what happens at each limit.
+
+### Mock endpoints and evaluation
+
+`mc-recon mock` serves Disseqt (registry, policies, validate, traces, ledger, dashboard) and an
+OpenAI-compatible LLM, with injectable failures. `mc-recon eval` then proves the behaviour end to
+end. It covers accuracy against the seeded errors, every limit, outages, injection in a late file
+row, restart after checkpoint pruning, memory, the full HTTP path and the governance lifecycle.
+
+To run the agent against the mock instead of the in-process fakes:
 
 ```bash
-H='-H X-Analyst-Id:alice -H content-type:application/json'
-RID=$(curl -s -X POST localhost:8000/runs $H -d '{"dataset":"pair_01"}' | jq -r .run_id)
-curl -s localhost:8000/runs/$RID/mapping | jq '.proposal, .problems'     # review the proposal
-curl -s -X POST localhost:8000/runs/$RID/mapping/confirm $H -d '{}'     # confirm (or send {"mapping": {...}})
-curl -s localhost:8000/runs/$RID/exceptions | jq '.[] | {id, category, status}'
-curl -s localhost:8000/runs/$RID/remediation-log | jq
-curl -s localhost:8000/runs/$RID/events | jq '.[] | {event_type, actor, subject_id}'
+mc-recon mock &
+MC_LLM_PROVIDER=http MC_LLM_BASE_URL=http://localhost:8100 MC_LLM_API_KEY=mock-key \
+MC_POLICY_GATE=http MC_DISSEQT_URL=http://localhost:8100 MC_DISSEQT_API_KEY=mock-key \
+mc-recon serve
 ```
+
+### Operations
+
+- Hardened container: non-root, read-only root filesystem, hash-pinned dependencies, health probes.
+- Kubernetes manifest and per-cloud notes in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+- CI on every push: lint, tests, evaluation, image build and a smoke test of the running container.
+- Crash recovery: a paused run resumes from its checkpoint after a process restart.
+- Idempotent writes through `Idempotency-Key`, safe under concurrent retries.
+
+## Reconciliation rules
+
+| Discrepancy | Rule | Default tolerance |
+|---|---|---|
+| `UNMATCHED_EXPECTED_PAYMENT` | No payment within the window around the due date | ±3 days |
+| `DUPLICATE_PAYMENT` | Repeat direct debits with the same mandate and amount; later ones excluded from netting | 5 days |
+| `AMOUNT_MISMATCH` | Net received differs from scheduled; split payments that net correctly are fine | 0.01 |
+| `RATE_COMPONENT_MISMATCH` | Applied rate differs from base plus margin, or investor figures differ from servicing | 0.005 pp |
+| `BALANCE_MISMATCH` | Investor closing balance differs from servicing | 0.05 |
+| `UNMATCHED_PAYMENT` | Payment for an unknown loan, or outside the match window | n/a |
+| `POPULATION_MISMATCH` | Loan is in only one of servicing and investor data | n/a |
+
+## API
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /runs` | Start a run on a dataset. It stops at mapping confirmation |
+| `POST /runs` | Start a run; it pauses for mapping confirmation |
 | `GET /runs/{id}` | Status, pending human action, exception counts, manifest |
-| `GET /runs/{id}/mapping` | Proposed mapping, problems with it, column profiles, input-screen findings |
-| `POST /runs/{id}/mapping/confirm` | Accept the proposal (`{}`) or supply an edited `mapping`. Validated against the headers before resuming |
-| `GET /runs/{id}/exceptions` | Exceptions with category, rationale, every policy verdict and reviews |
-| `POST /runs/{id}/exceptions/{exc}/review` | `approve` (human override) / `edit` (re-checked against the policy) / `reject` |
-| `GET /runs/{id}/remediation-log` | Final append-only log with evidence and final verdict |
-| `GET /runs/{id}/events` | Audit trail: mapping confirmation, policy and trajectory verdicts, reviews, input-screen blocks |
-| `GET /runs/{id}/trajectory` | Ordered steps the agent took (scored by tool-call-accuracy and plan-coherence) |
-| `GET /runs/{id}/metrics` | Latency per step, human wait, LLM calls, tokens and cost, PASS/BLOCK, per-validator scores, owner and priority mix, drift vs baseline |
-| `GET /metrics` | The same across all runs (p50/p95 latency, pooled validator pass rates) |
-| `POST /baselines`, `GET /baselines/latest` | Week 1 baseline: manual-process notes through the same checks |
-| `GET /runs/{id}/harness` | Usage against every limit, limits reached, held findings, state size |
-| `GET /memory/mappings`, `DELETE /memory/mappings/{fingerprint}` | Inspect or remove remembered mappings |
-| `GET /governance/system`, `/controls`, `/coverage`, `/evidence`, `/report` | UC2: registry record, control status, requirement coverage, evidence, report (`?format=markdown`) |
+| `GET /runs/{id}/mapping` | Proposed mapping, problems, column profiles, screening results |
+| `POST /runs/{id}/mapping/confirm` | Accept (`{}`) or supply an edited `mapping` |
+| `GET /runs/{id}/exceptions` | Exceptions with category, rationale, verdicts and reviews |
+| `POST /runs/{id}/exceptions/{exc}/review` | `approve` (needs `note`), `edit` or `reject` |
+| `GET /runs/{id}/remediation-log` | Final log with evidence and verdict |
+| `GET /runs/{id}/events` | Audit trail of oversight, policy and limit events |
+| `GET /runs/{id}/trajectory` | Ordered steps the agent took |
+| `GET /runs/{id}/metrics`, `GET /metrics` | Latency, tokens, cost, scores and drift, per run or overall |
+| `GET /runs/{id}/harness` | Usage against limits, limits reached, held findings |
+| `POST /baselines`, `GET /baselines/latest` | Run or read the manual-process baseline |
+| `GET`, `DELETE /memory/mappings` | Inspect remembered mappings; delete by `/{fingerprint}` |
+| `GET /governance/system`, `/controls`, `/coverage`, `/evidence`, `/report` | UC2 registry record, status, coverage, evidence and report |
+| `GET /healthz`, `/readyz` | Liveness and readiness |
 
-**Exception lifecycle:** `drafted` → `passed` or `blocked`. A blocked exception goes to review:
-`approve` needs a `note` and makes it `approved_override` (logged and flagged as a human
-override), `edit` makes it `edited` and sends it back through the policy, and `reject` makes it
-`rejected` (not logged). The last review round refuses `edit`, so the loop always ends.
-Logged exceptions end up `logged`. When the policy gate is down, or returns a non-final async
-verdict, the result is BLOCK.
+Mutating calls accept `Idempotency-Key`. Set `MC_ANALYST_TOKENS=token:analyst,...` to require a
+bearer token on every route except the probes. Without it the service runs in local mode, trusts
+the `X-Analyst-Id` header, leaves reads open, and warns at startup. All settings are environment
+variables, documented in [`src/mc_recon/config.py`](src/mc_recon/config.py).
 
 ## Repository layout
 
 ```
 src/mc_recon/
-  engine/            # deterministic core — no LLM, no network
-    schema.py        #   canonical fields per source, ColumnMapping + validation, errors
-    loader.py        #   CSV -> typed records through a confirmed mapping; fails loudly
-    profile.py       #   column profiles for the ingest node / mapping prompt
-    reconcile.py     #   match, net, compare -> Discrepancy with row evidence
-    models.py        #   records, Discrepancy, EvidenceRef, ReconConfig, ReconciliationResult
-    taxonomy.py      #   DiscrepancyKind (engine) / ExceptionCategory (business) + guard
-  llm/
-    provider.py      #   LLMProvider protocol, LLMRequest (+cache_key), prompt versions
-    schemas.py       #   MappingProposal, ClassificationOutput, RationaleOutput (strict)
-    payloads.py      #   request builders shared by graph nodes and the oracle
-    fake.py          #   RecordedFakeProvider (replay) + RecordingProvider (capture)
-  data/
-    synthetic.py     #   seeded generator for reconciliation pairs + error catalog
-    oracle.py        #   ground-truth LLM recordings for each pair
-  graph.py           # LangGraph agent: nodes, routing, interrupts
-  service.py         # run lifecycle; validates human actions before resuming the graph
-  api.py             # FastAPI app (thin HTTP shell over RunService)
-  policy.py          # PolicyGate protocol, FakePolicyGate, fail-closed wrappers
-  store.py           # SQLite run store; append-only events + remediation log
-  observability.py   # Tracer seam (Null / InMemory; Disseqt later)
-  config.py          # env-var settings, validated at startup
-  server.py          # `mc-recon serve`: production entrypoint
-  cli.py             # `mc-recon` entry point
-  limits.py          # AgentLimits + RunBudget: every per-run bound
-  memory.py          # checkpoint pruning, mapping-memory guards
-  governance.py      # UC2: controls, evidence, coverage, report
-  evaluation.py      # `mc-recon eval` scenarios and scorecard
-  transport.py       # bounded retries for external HTTP
-  disseqt_http.py    # policy, trace and registry clients
-  mocks/app.py       # mock Disseqt + LLM + fault injection
-data/synthetic/pair_0{1,2,3}/   # committed fixtures (regenerated byte-for-byte by tests)
-docs/IMPLEMENTATION_PLAN.md
-docs/DEPLOYMENT.md
-Dockerfile, .dockerignore, docker-compose.yml, Makefile
-requirements/        # hash-pinned lock files used by the image (`make lock` to refresh)
-deploy/kubernetes/   # portable manifest (EKS / AKS / GKE / on-prem)
-scripts/smoke_test.py
-.github/workflows/   # GitHub Actions CI
-tests/
+  engine/          Deterministic core: schema, loader, profiling, reconciliation rules
+  llm/             Provider interface, prompts, strict output schemas, fake and HTTP providers
+  data/            Synthetic data generator and ground-truth LLM recordings
+  mocks/           Mock Disseqt and LLM server with fault injection
+  graph.py         The LangGraph agent: nodes, routing, human pauses
+  service.py       Run lifecycle; validates human actions before resuming the graph
+  api.py           FastAPI app and service wiring
+  limits.py        AgentLimits and RunBudget
+  memory.py        Checkpoint pruning and mapping-memory guards
+  policy.py        PolicyGate interface, fake validators, fail-closed wrappers
+  governance.py    UC2 controls, evidence, coverage and report
+  remediation.py   Deterministic owner, priority, SLA and amount at risk
+  baseline.py      Manual-process baseline
+  metrics.py       Per-run and cross-run analytics
+  observability.py Tracing and span exporters
+  store.py         SQLite store with append-only tables
+  transport.py     Bounded retries for external HTTP
+  disseqt_http.py  Disseqt policy, trace and registry clients
+  evaluation.py    `mc-recon eval` scenarios
+  config.py, server.py, cli.py
+data/synthetic/    Three seeded datasets with expected results
+tests/             Unit, flow, API, deployment and harness tests
+docs/              Traceability, harness, deployment and implementation plan
+deploy/kubernetes/ Portable manifest
+requirements/      Hash-pinned lock files (`make lock` to refresh)
+scripts/           Black-box smoke test
 ```
 
-## Reconciliation rules
+## Test data
 
-| Discrepancy kind | Rule | Default tolerance |
-|---|---|---|
-| `UNMATCHED_EXPECTED_PAYMENT` | No payment for the loan within ± window of the due date | window 3 days |
-| `DUPLICATE_PAYMENT` | Two or more DDs with the same mandate and amount within the duplicate window; later ones are excluded from netting | 5 days |
-| `AMOUNT_MISMATCH` | Net received ≠ scheduled amount (split payments that net correctly are fine) | 0.01 |
-| `RATE_COMPONENT_MISMATCH` | applied ≠ base + margin, or the investor's rate/margin ≠ servicing's | 0.005 pp |
-| `BALANCE_MISMATCH` | Investor closing balance ≠ servicing closing balance | 0.05 |
-| `UNMATCHED_PAYMENT` | Payment for an unknown loan, or outside the match window | — |
-| `POPULATION_MISMATCH` | Loan is in servicing or investor data but not both | — |
+`data/synthetic/pair_01` to `pair_03` hold 40, 60 and 80 loans with planted errors, regenerated
+byte for byte by `mc-recon generate`. Each has the three input files, the correct mapping, a
+catalog of every planted error, and recordings of what a perfect LLM would answer.
 
-All amounts are `Decimal`. Output is fully deterministic: the same inputs and config always give
-byte-identical JSON. Discrepancy ids (`D-<sha256[:12]>`) are derived from content, so
-remediation-log writes can be idempotent.
+They also carry harmless noise that must **not** raise exceptions: odd loan-reference casing, split
+payments that net correctly, ±0.01 rounding, late value dates inside the window, and weekend rolls.
+The tests require zero misses and zero false positives on every dataset. A changed prompt or
+payload fails loudly with a missing recording instead of replaying a stale answer.
 
-## Synthetic data
+## Known limitations
 
-`data/synthetic/pair_NN/` contains:
+- The Disseqt API routes and payloads are assumed, because its docs are behind a login. That
+  assumption is confined to `disseqt_http.py` and `mocks/app.py`. The fake validators are simple
+  deterministic stand-ins for the real ones.
+- Test accuracy reflects the mocked LLM replaying perfect answers. It validates the engine and the
+  pipeline, not a live model's quality.
+- SQLite and in-process locks limit this to one replica. Scaling out needs the Postgres backends.
+- Graph calls are synchronous. A live model would need a background worker.
+- Static tokens stand in for SSO. Retention is recorded but nothing purges on a schedule, and the
+  `risk_level`, `provider_role` and retention values are placeholders for compliance to set.
 
-| File | Purpose |
+## Further reading
+
+| Document | Covers |
 |---|---|
-| `servicing_extract.csv`, `payments.csv`, `investor_report.csv` | Raw inputs, deliberately with non-canonical headers (two header variants) and mixed date and number formats |
-| `expected_mapping.json` | The correct `ColumnMapping`, which is the ground truth for the mapping step |
-| `seeded_errors.json` | Every planted error, with its expected kind and category, plus every piece of benign noise |
-| `oracle_recordings.json` | What a perfect LLM would return for each call on this pair, replayed by `RecordedFakeProvider` |
-
-Benign noise that must **not** raise exceptions: loan refs with odd case or whitespace, split
-Faster Payments, ±0.01 balance rounding, 4dp rate drift within tolerance, late value dates
-inside the window, and weekend rolls. The golden tests enforce zero misses and zero false
-positives on every pair.
-
-## Fake LLM provider
-
-```python
-from mc_recon.llm import RecordedFakeProvider, mapping_request, MappingProposal
-
-fake = RecordedFakeProvider.from_files("data/synthetic/pair_01/oracle_recordings.json")
-proposal = fake.generate(mapping_request(profiles), MappingProposal).output
-```
-
-Recordings are keyed by `sha256(task, prompt_version, payload)`. A changed payload or prompt
-version raises `MissingRecordingError` rather than returning something plausible, and a
-recording that no longer fits its output schema raises `LLMOutputValidationError`. To freeze a
-live model run into fixtures, wrap the real provider in `RecordingProvider` and call `.save()`.
-
-## Disseqt SDK
-
-The plan targets `disseqt-ai-sdk==0.11.2`, pinned in the `agent` extra. Several README-level
-claims about the SDK don't match its code (for example, `project_id` is still required, policy
-evaluation goes through `disseqt_sdk.Client.validate(..., policies=[...])`, and a span-level
-`realtime_policy_id` does not block anything). See the change log in the implementation plan.
+| [docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md) | Every requirement in the brief mapped to code, plus open gaps and access needed |
+| [docs/HARNESS.md](docs/HARNESS.md) | Limits, memory, input screening, mocks and evaluation |
+| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Full design, timeline, and the verified surface of `disseqt-ai-sdk==0.11.2` |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Container image, per-cloud notes, secrets and scaling |
