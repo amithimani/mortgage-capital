@@ -103,6 +103,8 @@ def main() -> int:
     status, cov = call(base, "GET", "/governance/coverage")
     if status == 200:
         check(cov["gaps"] == [], f"governance: {cov['covered']}/{cov['total']} requirements")
+    status, spec = call(base, "GET", "/openapi.json")
+    check(status == 200 and "/runs" in spec["paths"], f"OpenAPI spec: {len(spec['paths'])} paths")
     print(f"OK run {rid}: status={run['status']} counts={run['exception_counts']}")
     return 0
 

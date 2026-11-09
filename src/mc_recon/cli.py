@@ -7,6 +7,7 @@ mc-recon baseline data/synthetic/pair_0*   # Week 1 baseline summary
 mc-recon serve                             # HTTP API (PORT / MC_* env vars)
 mc-recon eval [--json]                     # every harness scenario, as a scorecard
 mc-recon mock [--port 8100]                # mock Disseqt + LLM endpoints
+mc-recon openapi [--check]                 # write or verify docs/openapi.json
 """
 
 from __future__ import annotations
@@ -85,7 +86,24 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--port", type=int, default=8100)
     m.add_argument("--api-key", default="mock-key")
 
+    o = sub.add_parser("openapi", help="write the OpenAPI spec, or check it is up to date")
+    o.add_argument("--out", type=Path, default=Path("docs/openapi.json"))
+    o.add_argument("--check", action="store_true", help="exit non-zero if --out is out of date")
+
     args = parser.parse_args(argv)
+    if args.cmd == "openapi":
+        from .api import openapi_spec
+
+        spec = json.dumps(openapi_spec(), indent=2, sort_keys=True) + "\n"
+        if args.check:
+            if not args.out.exists() or args.out.read_text() != spec:
+                print(f"{args.out} is out of date; run `mc-recon openapi`", file=sys.stderr)
+                return 1
+            print(f"{args.out} is up to date", file=sys.stderr)
+            return 0
+        args.out.write_text(spec)
+        print(f"wrote {args.out}", file=sys.stderr)
+        return 0
     if args.cmd == "eval":
         from .evaluation import main as evaluate
 

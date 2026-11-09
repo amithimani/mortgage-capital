@@ -85,9 +85,11 @@ mapping memory, the full path through the mocks, and the governance lifecycle.
 
 ## Authentication
 
-Set `MC_ANALYST_TOKENS=token:analyst,...` and every route except the probes needs a bearer token,
-with the identity taken from it. Without it the service runs in local PoC mode, prints a warning
-at startup, and trusts the `X-Analyst-Id` header. Static tokens are a stand-in for SSO.
+Set `MC_ANALYST_TOKENS=token:analyst,...` and every route except the probes needs a token, with
+the identity taken from it. `/docs`, `/redoc` and `/openapi.json` also accept HTTP Basic, with the
+token as the password, so a browser can open them. Without tokens the service runs in local PoC
+mode, prints a warning at startup, and trusts the `X-Analyst-Id` header. Static tokens are a
+stand-in for SSO.
 
 ## What this doesn't cover
 

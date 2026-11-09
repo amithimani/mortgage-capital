@@ -231,10 +231,17 @@ mc-recon serve
 | `GET /governance/system`, `/controls`, `/coverage`, `/evidence`, `/report` | UC2 registry record, status, coverage, evidence and report |
 | `GET /healthz`, `/readyz` | Liveness and readiness |
 
-Mutating calls accept `Idempotency-Key`. Set `MC_ANALYST_TOKENS=token:analyst,...` to require a
-bearer token on every route except the probes. Without it the service runs in local mode, trusts
-the `X-Analyst-Id` header, leaves reads open, and warns at startup. All settings are environment
-variables, documented in [`src/mc_recon/config.py`](src/mc_recon/config.py).
+Interactive docs are at `/docs` (Swagger UI) and `/redoc` while the server runs. The spec is also
+committed at [docs/openapi.json](docs/openapi.json), generated from the code with `mc-recon
+openapi`, and a test fails if it goes stale. Tests also send real requests in every run state and
+fail on any response field the contract doesn't declare.
+
+Mutating calls accept `Idempotency-Key`, and every error has the body `{"error", "detail"}`. Set
+`MC_ANALYST_TOKENS=token:analyst,...` to require a token on every route except the probes,
+including the docs. To open `/docs` in a browser, enter any username and the token as the
+password. Without tokens the service runs in local mode, trusts the `X-Analyst-Id` header, leaves
+reads and docs open, and warns at startup. All settings are environment variables, documented in
+[`src/mc_recon/config.py`](src/mc_recon/config.py).
 
 ## Repository layout
 
@@ -247,6 +254,7 @@ src/mc_recon/
   graph.py         The LangGraph agent: nodes, routing, human pauses
   service.py       Run lifecycle; validates human actions before resuming the graph
   api.py           FastAPI app and service wiring
+  api_models.py    Response contracts that generate the OpenAPI spec
   limits.py        AgentLimits and RunBudget
   memory.py        Checkpoint pruning and mapping-memory guards
   policy.py        PolicyGate interface, fake validators, fail-closed wrappers
@@ -298,4 +306,5 @@ payload fails loudly with a missing recording instead of replaying a stale answe
 | [docs/BRIEF_TRACEABILITY.md](docs/BRIEF_TRACEABILITY.md) | Every requirement in the brief mapped to code, plus open gaps and access needed |
 | [docs/HARNESS.md](docs/HARNESS.md) | Limits, memory, input screening, mocks and evaluation |
 | [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Full design, timeline, and the verified surface of `disseqt-ai-sdk==0.11.2` |
+| [docs/openapi.json](docs/openapi.json) | The API contract, generated from the code |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Container image, per-cloud notes, secrets and scaling |

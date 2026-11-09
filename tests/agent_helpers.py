@@ -9,6 +9,7 @@ from conftest import SYNTHETIC_DIR
 
 from mc_recon.data.oracle import RECORDINGS_FILE
 from mc_recon.graph import AgentDeps
+from mc_recon.limits import AgentLimits
 from mc_recon.llm import LLMTask, RecordedFakeProvider, RecordingSet
 from mc_recon.observability import InMemoryTracer
 from mc_recon.policy import FakePolicyGate
@@ -42,6 +43,7 @@ def make_service(
     store: RunStore | None = None,
     checkpointer=None,
     governance=None,
+    limits=None,
 ) -> tuple[RunService, InMemoryTracer]:
     tracer = InMemoryTracer()
     deps = AgentDeps(
@@ -50,6 +52,7 @@ def make_service(
         store=store or RunStore(),
         tracer=tracer,
         governance=governance,
+        limits=limits or AgentLimits(),
     )
     return RunService(deps, data_root, checkpointer=checkpointer), tracer
 
